@@ -1754,7 +1754,7 @@ static inline int32_t get_avg_pstate(struct cpudata *cpu)
 			  cpu->sample.core_avg_perf);
 }
 
-static inline int32_t get_target_pstate(struct cpudata *cpu)
+static inline int32_t get_target_pstate_use_cpu_load(struct cpudata *cpu)
 {
 	struct sample *sample = &cpu->sample;
 	int32_t busy_frac;
@@ -1814,7 +1814,7 @@ static void intel_pstate_adjust_pstate(struct cpudata *cpu)
 
 	update_turbo_state();
 
-	target_pstate = get_target_pstate(cpu);
+	target_pstate = get_target_pstate_use_cpu_load(cpu);
 	target_pstate = intel_pstate_prepare_request(cpu, target_pstate);
 	trace_cpu_frequency(target_pstate * cpu->pstate.scaling, cpu->cpu);
 	intel_pstate_update_pstate(cpu, target_pstate);
