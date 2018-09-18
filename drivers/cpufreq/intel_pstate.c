@@ -277,6 +277,7 @@ static struct cpudata **all_cpu_data;
  * @get_scaling:	Callback to get frequency scaling factor
  * @get_val:		Callback to convert P state to actual MSR write value
  * @get_vid:		Callback to get VID data for Atom platforms
+ * @update_util:	Active mode utilization update callback.
  *
  * Core and Atom CPU models have different way to get P State limits. This
  * structure is used to store those callbacks.
@@ -290,6 +291,8 @@ struct pstate_funcs {
 	int (*get_aperf_mperf_shift)(void);
 	u64 (*get_val)(struct cpudata*, int pstate);
 	void (*get_vid)(struct cpudata *);
+	void (*update_util)(struct update_util_data *data, u64 time,
+			    unsigned int flags);
 };
 
 static struct pstate_funcs pstate_funcs __read_mostly;
@@ -1878,6 +1881,7 @@ static struct pstate_funcs core_funcs = {
 	.get_turbo = core_get_turbo_pstate,
 	.get_scaling = core_get_scaling,
 	.get_val = core_get_val,
+	.update_util = intel_pstate_update_util,
 };
 
 static const struct pstate_funcs silvermont_funcs = {
@@ -1888,6 +1892,7 @@ static const struct pstate_funcs silvermont_funcs = {
 	.get_val = atom_get_val,
 	.get_scaling = silvermont_get_scaling,
 	.get_vid = atom_get_vid,
+	.update_util = intel_pstate_update_util,
 };
 
 static const struct pstate_funcs airmont_funcs = {
@@ -1898,6 +1903,7 @@ static const struct pstate_funcs airmont_funcs = {
 	.get_val = atom_get_val,
 	.get_scaling = airmont_get_scaling,
 	.get_vid = atom_get_vid,
+	.update_util = intel_pstate_update_util,
 };
 
 static const struct pstate_funcs knl_funcs = {
@@ -1908,6 +1914,7 @@ static const struct pstate_funcs knl_funcs = {
 	.get_aperf_mperf_shift = knl_get_aperf_mperf_shift,
 	.get_scaling = core_get_scaling,
 	.get_val = core_get_val,
+	.update_util = intel_pstate_update_util,
 };
 
 static const struct pstate_funcs bxt_funcs = {
@@ -1917,6 +1924,7 @@ static const struct pstate_funcs bxt_funcs = {
 	.get_turbo = core_get_turbo_pstate,
 	.get_scaling = core_get_scaling,
 	.get_val = core_get_val,
+	.update_util = intel_pstate_update_util,
 };
 
 #define ICPU(model, policy) \
@@ -2023,9 +2031,7 @@ static void intel_pstate_set_update_util_hook(unsigned int cpu_num)
 	/* Prevent intel_pstate_update_util() from using stale data. */
 	cpu->sample.time = 0;
 	cpufreq_add_update_util_hook(cpu_num, &cpu->update_util,
-				     (hwp_active ?
-				      intel_pstate_update_util_hwp :
-				      intel_pstate_update_util));
+				     pstate_funcs.update_util);
 	cpu->update_util_set = true;
 }
 
@@ -2598,6 +2604,7 @@ static void __init copy_cpu_funcs(struct pstate_funcs *funcs)
 	pstate_funcs.get_scaling = funcs->get_scaling;
 	pstate_funcs.get_val   = funcs->get_val;
 	pstate_funcs.get_vid   = funcs->get_vid;
+	pstate_funcs.update_util = funcs->update_util;
 	pstate_funcs.get_aperf_mperf_shift = funcs->get_aperf_mperf_shift;
 }
 
@@ -2764,8 +2771,11 @@ static int __init intel_pstate_init(void)
 	id = x86_match_cpu(hwp_support_ids);
 	if (id) {
 		copy_cpu_funcs(&core_funcs);
-		if (!no_hwp) {
+		if (no_hwp) {
+			pstate_funcs.update_util = intel_pstate_update_util;
+		} else {
 			hwp_active++;
+			pstate_funcs.update_util = intel_pstate_update_util_hwp;
 			hwp_mode_bdw = id->driver_data;
 			intel_pstate.attr = hwp_cpufreq_attrs;
 			goto hwp_cpu_matched;
