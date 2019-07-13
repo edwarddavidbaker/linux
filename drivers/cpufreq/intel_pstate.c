@@ -1908,6 +1908,15 @@ static const struct pstate_funcs knl_funcs = {
 	.get_val = core_get_val,
 };
 
+static const struct pstate_funcs bxt_funcs = {
+	.get_max = core_get_max_pstate,
+	.get_max_physical = core_get_max_pstate_physical,
+	.get_min = core_get_min_pstate,
+	.get_turbo = core_get_turbo_pstate,
+	.get_scaling = core_get_scaling,
+	.get_val = core_get_val,
+};
+
 #define ICPU(model, policy) \
 	{ X86_VENDOR_INTEL, 6, model, X86_FEATURE_APERFMPERF,\
 			(unsigned long)&policy }
@@ -1931,8 +1940,8 @@ static const struct x86_cpu_id intel_pstate_cpu_ids[] = {
 	ICPU(INTEL_FAM6_BROADWELL_D,		core_funcs),
 	ICPU(INTEL_FAM6_XEON_PHI_KNL,		knl_funcs),
 	ICPU(INTEL_FAM6_XEON_PHI_KNM,		knl_funcs),
-	ICPU(INTEL_FAM6_ATOM_GOLDMONT,		core_funcs),
-	ICPU(INTEL_FAM6_ATOM_GOLDMONT_PLUS,     core_funcs),
+	ICPU(INTEL_FAM6_ATOM_GOLDMONT,		bxt_funcs),
+	ICPU(INTEL_FAM6_ATOM_GOLDMONT_PLUS,     bxt_funcs),
 	ICPU(INTEL_FAM6_SKYLAKE_X,		core_funcs),
 	{}
 };
