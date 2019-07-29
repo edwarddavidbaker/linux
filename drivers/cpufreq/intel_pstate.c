@@ -3122,6 +3122,7 @@ static int intel_pstate_update_status(const char *buf, size_t size)
 
 static int no_load __initdata;
 static int no_hwp __initdata;
+static int lp __initdata = -1;
 static int hwp_only __initdata;
 static unsigned int force_load __initdata;
 
@@ -3299,6 +3300,7 @@ static const struct x86_cpu_id hwp_support_ids[] __initconst = {
 
 static int __init intel_pstate_init(void)
 {
+	bool use_lp = lp == 1;
 	const struct x86_cpu_id *id;
 	int rc;
 
@@ -3311,9 +3313,20 @@ static int __init intel_pstate_init(void)
 	id = x86_match_cpu(hwp_support_ids);
 	if (id) {
 		copy_cpu_funcs(&core_funcs);
+
 		if (!no_hwp) {
 			hwp_active++;
-			pstate_funcs.update_util = intel_pstate_update_util_hwp;
+			/*
+			 * Enable LP controller by default on HWP
+			 * platforms other than servers.
+			 */
+			if (lp < 0 && !intel_pstate_acpi_pm_profile_server())
+				use_lp = true;
+
+			pstate_funcs.update_util = use_lp ?
+				intel_pstate_update_util_hwp_lp :
+				intel_pstate_update_util_hwp;
+
 			hwp_mode_bdw = id->driver_data;
 			intel_pstate.attr = hwp_cpufreq_attrs;
 			goto hwp_cpu_matched;
@@ -3327,6 +3340,9 @@ static int __init intel_pstate_init(void)
 
 		copy_cpu_funcs((struct pstate_funcs *)id->driver_data);
 	}
+
+	if (!use_lp)
+		pstate_funcs.update_util = intel_pstate_update_util;
 
 	if (intel_pstate_msrs_not_valid()) {
 		pr_info("Invalid MSRs\n");
@@ -3391,6 +3407,11 @@ static int __init intel_pstate_setup(char *str)
 		hwp_only = 1;
 	if (!strcmp(str, "per_cpu_perf_limits"))
 		per_cpu_limits = true;
+
+	if (!strcmp(str, "lp"))
+		lp = 1;
+	if (!strcmp(str, "no_lp"))
+		lp = 0;
 
 #ifdef CONFIG_ACPI
 	if (!strcmp(str, "support_acpi_ppc"))
