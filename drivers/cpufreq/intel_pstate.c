@@ -19,6 +19,7 @@
 #include <linux/list.h>
 #include <linux/cpu.h>
 #include <linux/cpufreq.h>
+#include <linux/debugfs.h>
 #include <linux/sysfs.h>
 #include <linux/types.h>
 #include <linux/fs.h>
@@ -32,6 +33,8 @@
 #include <asm/cpu_device_id.h>
 #include <asm/cpufeature.h>
 #include <asm/intel-family.h>
+
+#include "../../kernel/sched/sched.h"
 
 #define INTEL_PSTATE_SAMPLING_INTERVAL	(10 * NSEC_PER_MSEC)
 
@@ -57,6 +60,11 @@
 static inline int32_t mul_fp(int32_t x, int32_t y)
 {
 	return ((int64_t)x * (int64_t)y) >> FRAC_BITS;
+}
+
+static inline int rnd_fp(int32_t x)
+{
+	return (x + (1 << (FRAC_BITS - 1))) >> FRAC_BITS;
 }
 
 static inline int32_t div_fp(s64 x, s64 y)
@@ -169,6 +177,48 @@ struct vid_data {
 	int32_t ratio;
 };
 
+enum lp_status {
+	LP_BOTTLENECK_IO = 1 << 0
+};
+
+/**
+ * Scheduling and PM statistics gathered at every call of the LP
+ * update_state() hooks.
+ */
+struct lp_sched_info {
+	int32_t realtime_count;
+	int32_t io_wait_count;
+	uint32_t max_response_frequency;
+	uint32_t last_response_frequency;
+};
+
+/**
+ * Status information derived from struct lp_sched_info above,
+ * indicating whether the system has a potential IO or latency
+ * bottleneck.
+ */
+struct lp_status_sample {
+	enum lp_status value;
+	int32_t realtime_avg;
+};
+
+/**
+ * struct lp_data - LP controller parameters and state.
+ * @sample_interval_ns:  Update interval in ns.
+ * @gain*:		 Response factor of the controller relative to each
+ *			 one of its linear input variables as fixed-point
+ *			 fraction.
+ */
+struct lp_data {
+	s64 sample_interval_ns;
+	int32_t gain_aggr;
+	int32_t gain_rt;
+	int32_t gain;
+
+	struct lp_sched_info sched;
+	struct lp_status_sample last_status;
+};
+
 /**
  * struct global_params - Global parameters, mostly tunable via sysfs.
  * @no_turbo:		Whether or not to use turbo P-states.
@@ -239,6 +289,7 @@ struct cpudata {
 
 	struct pstate_data pstate;
 	struct vid_data vid;
+	struct lp_data lp;
 
 	u64	last_update;
 	u64	last_sample_time;
@@ -269,6 +320,24 @@ struct cpudata {
 static struct cpudata **all_cpu_data;
 
 /**
+ * struct lp_params - LP controller static configuration
+ * @sample_interval_ms:	     Update interval in ms.
+ * @setpoint_*_pml:	     Target CPU utilization at which the controller is
+ *			     expected to leave the current P-state untouched,
+ *			     as an integer per mille.
+ * @avg*_hz:		     Exponential averaging frequencies of the various
+ *			     low-pass filters as an integer in Hz.
+ */
+struct lp_params {
+	int sample_interval_ms;
+	int setpoint_aggr_pml;
+	int setpoint_0_pml;
+	int avg_hz;
+	int realtime_gain_pml;
+	int debug;
+};
+
+/**
  * struct pstate_funcs - Per CPU model specific callbacks
  * @get_max:		Callback to get maximum non turbo effective P state
  * @get_max_physical:	Callback to get maximum non turbo physical P state
@@ -296,6 +365,14 @@ struct pstate_funcs {
 };
 
 static struct pstate_funcs pstate_funcs __read_mostly;
+static struct lp_params lp_params __read_mostly = {
+	.sample_interval_ms = 10,
+	.setpoint_aggr_pml = 1500,
+	.setpoint_0_pml = 900,
+	.avg_hz = 2,
+	.realtime_gain_pml = 12000,
+	.debug = 0,
+};
 
 static int hwp_active __read_mostly;
 static int hwp_mode_bdw __read_mostly;
@@ -1790,6 +1867,143 @@ static inline int32_t get_target_pstate_use_cpu_load(struct cpudata *cpu)
 		target += (avg_pstate - target) >> 1;
 
 	return target;
+}
+
+/**
+ * Initialize the struct lp_data of the specified CPU to the defaults
+ * calculated from @lp_params.
+ */
+static void intel_pstate_reset_lp(struct cpudata *cpu)
+{
+	struct lp_data *lp = &cpu->lp;
+
+	lp->sample_interval_ns = lp_params.sample_interval_ms * NSEC_PER_MSEC;
+	lp->gain_aggr = max(1, div_fp(1000, lp_params.setpoint_aggr_pml));
+	lp->gain_rt = div_fp(cpu->pstate.max_pstate * lp_params.realtime_gain_pml,
+			     1000);
+	lp->gain = max(1, div_fp(1000, lp_params.setpoint_0_pml));
+	lp->sched.last_response_frequency = lp_params.avg_hz;
+}
+
+/**
+ * Fixed point representation with twice the usual number of
+ * fractional bits.
+ */
+#define DFRAC_BITS 16
+#define DFRAC_ONE (1 << DFRAC_BITS)
+#define DFRAC_MAX_INT (0u - (uint32_t)DFRAC_ONE)
+
+/**
+ * Fast but rather inaccurate piecewise-linear approximation of a
+ * fixed-point inverse exponential:
+ *
+ *  exp2n(p) = int_tofp(1) * 2 ^ (-p / DFRAC_ONE) + O(1)
+ *
+ * The error term should be lower in magnitude than 0.044.
+ */
+static int32_t exp2n(uint32_t p)
+{
+	if (p < 32 * DFRAC_ONE) {
+		/* Interpolate between 2^-floor(p) and 2^-ceil(p). */
+		const uint32_t floor_p = p >> DFRAC_BITS;
+		const uint32_t ceil_p = (p + DFRAC_ONE - 1) >> DFRAC_BITS;
+		const uint64_t frac_p = p - (floor_p << DFRAC_BITS);
+
+		return ((int_tofp(1) >> floor_p) * (DFRAC_ONE - frac_p) +
+			(ceil_p >= 32 ? 0 : int_tofp(1) >> ceil_p) * frac_p) >>
+			DFRAC_BITS;
+	}
+
+	/* Short-circuit to avoid overflow. */
+	return 0;
+}
+
+static int32_t get_last_sample_avg_weight(struct cpudata *cpu, unsigned int hz)
+{
+	/*
+	 * Approximate, but saves several 64-bit integer divisions
+	 * below and should be fully evaluated at compile-time.
+	 * Causes the exponential averaging to have an effective base
+	 * of 1.90702343749, which has little functional implications
+	 * as long as the hz parameter is scaled accordingly.
+	 */
+	const uint32_t ns_per_s_shift = order_base_2(NSEC_PER_SEC);
+	const uint64_t delta_ns = cpu->sample.time - cpu->last_sample_time;
+	return exp2n(min((uint64_t)DFRAC_MAX_INT,
+			 (hz * delta_ns) >> (ns_per_s_shift - DFRAC_BITS)));
+}
+
+static const struct lp_status_sample *get_lp_status_sample(
+	struct cpudata *cpu, const int32_t po)
+{
+	struct lp_data *lp = &cpu->lp;
+	struct lp_sched_info *sched = &cpu->lp.sched;
+	struct lp_status_sample *last_status = &lp->last_status;
+
+	/*
+	 * Calculate the LP_BOTTLENECK_IO state bit, which indicates
+	 * whether some IO device driver has requested a PM response
+	 * frequency bound due to it being under close to full
+	 * utilization, which should cause the controller to make a
+	 * more conservative trade-off between latency and energy
+	 * usage, since performance isn't guaranteed to scale further
+	 * with increasing CPU frequency whenever the system is close
+	 * to IO-bound.
+	 */
+	const bool bottleneck_io = sched->max_response_frequency < UINT_MAX;
+
+	/*
+	 * Calculate the realtime statistic that tracks the occurrence
+	 * of latency-sensitive events.
+	 */
+	const uint64_t delta_ns = cpu->sample.time - cpu->last_sample_time;
+	const int32_t realtime_sample =
+		div_fp((uint64_t)(sched->realtime_count +
+				  (bottleneck_io ? 0 : sched->io_wait_count)) *
+		       NSEC_PER_SEC,
+		       100 * delta_ns);
+	const int32_t alpha = get_last_sample_avg_weight(cpu, lp_params.avg_hz);
+	const int32_t realtime_avg = realtime_sample +
+		mul_fp(alpha, last_status->realtime_avg - realtime_sample);
+
+	/* Consume the scheduling information. */
+	sched->io_wait_count = 0;
+	sched->realtime_count = 0;
+	if (bottleneck_io)
+		sched->last_response_frequency = sched->max_response_frequency;
+	sched->max_response_frequency = 0;
+
+	/* Update the state of the controller. */
+	last_status->realtime_avg = realtime_avg;
+	last_status->value = (bottleneck_io ? LP_BOTTLENECK_IO : 0);
+
+	/* Update state used for tracing. */
+	cpu->sample.busy_scaled = int_tofp(sched->max_response_frequency);
+	cpu->iowait_boost = realtime_avg;
+
+	return last_status;
+}
+
+static bool update_lp_sample(struct cpudata *cpu, u64 time, unsigned int flags)
+{
+	struct lp_sched_info *sched = &cpu->lp.sched;
+
+	/* Update PM QoS request. */
+	const uint32_t resp_hz = pm_qos_request(PM_QOS_CPU_RESPONSE_FREQUENCY);
+	sched->max_response_frequency = !resp_hz ? UINT_MAX :
+		max(sched->max_response_frequency, resp_hz);
+
+	/* Update scheduling statistics. */
+	if ((flags & SCHED_CPUFREQ_IOWAIT))
+		sched->io_wait_count++;
+
+	if (cpu_rq(cpu->cpu)->rt.rt_nr_running)
+		sched->realtime_count++;
+
+	/* Return whether a P-state update is due. */
+	return smp_processor_id() == cpu->cpu &&
+		time - cpu->sample.time >= cpu->lp.sample_interval_ns &&
+		intel_pstate_sample(cpu, time);
 }
 
 static int intel_pstate_prepare_request(struct cpudata *cpu, int pstate)
