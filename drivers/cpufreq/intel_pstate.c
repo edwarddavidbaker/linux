@@ -1031,6 +1031,100 @@ static void intel_pstate_update_limits(unsigned int cpu)
 	mutex_unlock(&intel_pstate_driver_lock);
 }
 
+/************************** debugfs begin ************************/
+static void intel_pstate_reset_lp(struct cpudata *cpu);
+
+static int lp_param_set(void *data, u64 val)
+{
+	unsigned int cpu;
+
+	*(u32 *)data = val;
+	for_each_possible_cpu(cpu) {
+		if (all_cpu_data[cpu])
+			intel_pstate_reset_lp(all_cpu_data[cpu]);
+	}
+
+	WARN_ONCE(1, "Unsupported P-state LP parameter update via debugging interface");
+
+	return 0;
+}
+
+static int lp_param_get(void *data, u64 *val)
+{
+	*val = *(u32 *)data;
+	return 0;
+}
+DEFINE_DEBUGFS_ATTRIBUTE(fops_lp_param, lp_param_get, lp_param_set, "%llu\n");
+
+static struct dentry *debugfs_parent;
+
+struct lp_param {
+	char *name;
+	void *value;
+	struct dentry *dentry;
+};
+
+static struct lp_param lp_files[] = {
+	{"lp_sample_interval_ms", &lp_params.sample_interval_ms, },
+	{"lp_setpoint_aggr_pml", &lp_params.setpoint_aggr_pml, },
+	{"lp_setpoint_0_pml", &lp_params.setpoint_0_pml, },
+	{"lp_setpoint_1_pml", &lp_params.setpoint_1_pml, },
+	{"lp_avg_hz", &lp_params.avg_hz, },
+	{"lp_avg_2_hz", &lp_params.avg_2_hz, },
+	{"lp_realtime_gain_pml", &lp_params.realtime_gain_pml, },
+	{"lp_state_occ_threshold_pml", &lp_params.state_occ_threshold_pml, },
+	{"lp_debug", &lp_params.debug, },
+	{NULL, NULL, }
+};
+
+static void intel_pstate_update_util_lp(struct update_util_data *data,
+					u64 time, unsigned int flags);
+
+static void intel_pstate_update_util_hwp_lp(struct update_util_data *data,
+					    u64 time, unsigned int flags);
+
+static void intel_pstate_debug_expose_params(void)
+{
+	int i;
+
+	if (pstate_funcs.update_util != intel_pstate_update_util_lp &&
+	    pstate_funcs.update_util != intel_pstate_update_util_hwp_lp)
+		return;
+
+	debugfs_parent = debugfs_create_dir("pstate_snb", NULL);
+	if (IS_ERR_OR_NULL(debugfs_parent))
+		return;
+
+	for (i = 0; lp_files[i].name; i++) {
+		struct dentry *dentry;
+
+		dentry = debugfs_create_file_unsafe(lp_files[i].name, 0660,
+						    debugfs_parent,
+						    lp_files[i].value,
+						    &fops_lp_param);
+		if (!IS_ERR(dentry))
+			lp_files[i].dentry = dentry;
+	}
+}
+
+static void intel_pstate_debug_hide_params(void)
+{
+	int i;
+
+	if (IS_ERR_OR_NULL(debugfs_parent))
+		return;
+
+	for (i = 0; lp_files[i].name; i++) {
+		debugfs_remove(lp_files[i].dentry);
+		lp_files[i].dentry = NULL;
+	}
+
+	debugfs_remove(debugfs_parent);
+	debugfs_parent = NULL;
+}
+
+/************************** debugfs end ************************/
+
 /************************** sysfs begin ************************/
 #define show_one(file_name, object)					\
 	static ssize_t show_##file_name					\
@@ -3063,6 +3157,8 @@ static int intel_pstate_register_driver(struct cpufreq_driver *driver)
 
 	global.min_perf_pct = min_perf_pct_min();
 
+	intel_pstate_debug_expose_params();
+
 	return 0;
 }
 
@@ -3070,6 +3166,8 @@ static int intel_pstate_unregister_driver(void)
 {
 	if (hwp_active)
 		return -EBUSY;
+
+	intel_pstate_debug_hide_params();
 
 	cpufreq_unregister_driver(intel_pstate_driver);
 	intel_pstate_driver_cleanup();
