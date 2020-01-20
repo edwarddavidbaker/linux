@@ -1322,6 +1322,11 @@ static void execlists_submit_ports(struct intel_engine_cs *engine)
 	/* we need to manually load the submit queue */
 	if (execlists->ctrl_reg)
 		writel(EL_CTRL_LOAD, execlists->ctrl_reg);
+
+	if (execlists_num_ports(execlists) > 1 &&
+	    execlists->pending[1] &&
+	    !atomic_xchg(&execlists->overload, 1))
+		intel_gt_pm_active_begin(&engine->i915->gt);
 }
 
 static bool ctx_single_port_submission(const struct intel_context *ce)
@@ -1958,6 +1963,12 @@ cancel_port_requests(struct intel_engine_execlists * const execlists)
 		execlists_schedule_out(*port);
 	WRITE_ONCE(execlists->active,
 		   memset(execlists->inflight, 0, sizeof(execlists->inflight)));
+
+	if (atomic_xchg(&execlists->overload, 0)) {
+		struct intel_engine_cs *engine =
+			container_of(execlists, typeof(*engine), execlists);
+		intel_gt_pm_active_end(&engine->i915->gt);
+	}
 }
 
 static inline void
@@ -2138,6 +2149,9 @@ static void process_csb(struct intel_engine_cs *engine)
 
 			/* port0 completed, advanced to port1 */
 			trace_ports(execlists, "completed", execlists->active);
+
+			if (atomic_xchg(&execlists->overload, 0))
+				intel_gt_pm_active_end(&engine->i915->gt);
 
 			/*
 			 * We rely on the hardware being strongly
