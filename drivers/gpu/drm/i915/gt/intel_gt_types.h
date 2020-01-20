@@ -10,6 +10,7 @@
 #include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/notifier.h>
+#include <linux/pm_qos.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
 
@@ -90,6 +91,17 @@ struct intel_gt {
 	struct intel_engine_cs *engine[I915_NUM_ENGINES];
 	struct intel_engine_cs *engine_class[MAX_ENGINE_CLASS + 1]
 					    [MAX_ENGINE_INSTANCE + 1];
+
+	struct {
+		struct pm_qos_request req;
+		struct timer_list timer;
+		uint32_t target_hz;
+		uint32_t delay_max_ns;
+		uint32_t delay_slope_shift;
+		atomic64_t time_set_ns;
+		atomic64_t time_clear_ns;
+		atomic_t active_count;
+	} rf_qos;
 };
 
 enum intel_gt_scratch_field {

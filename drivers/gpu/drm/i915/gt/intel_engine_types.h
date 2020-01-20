@@ -252,6 +252,13 @@ struct intel_engine_execlists {
 	 */
 	u8 csb_head;
 
+	/**
+	 * @overload: whether at least two execlist ports are
+	 * currently submitted to the hardware, indicating that CPU
+	 * latency isn't critical in order to maintain the GPU busy.
+	 */
+	atomic_t overload;
+
 	I915_SELFTEST_DECLARE(struct st_preempt_hang preempt_hang;)
 };
 
