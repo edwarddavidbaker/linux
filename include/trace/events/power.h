@@ -379,7 +379,8 @@ DECLARE_EVENT_CLASS(pm_qos_request,
 
 	TP_printk("pm_qos_class=%s value=%d",
 		  __print_symbolic(__entry->pm_qos_class,
-			{ PM_QOS_CPU_DMA_LATENCY,	"CPU_DMA_LATENCY" }),
+			{ PM_QOS_CPU_DMA_LATENCY,	"CPU_DMA_LATENCY" },
+			{ PM_QOS_CPU_RESPONSE_FREQUENCY, "CPU_RESPONSE_FREQUENCY" }),
 		  __entry->value)
 );
 
@@ -424,7 +425,8 @@ TRACE_EVENT(pm_qos_update_request_timeout,
 
 	TP_printk("pm_qos_class=%s value=%d, timeout_us=%ld",
 		  __print_symbolic(__entry->pm_qos_class,
-			{ PM_QOS_CPU_DMA_LATENCY,	"CPU_DMA_LATENCY" }),
+			{ PM_QOS_CPU_DMA_LATENCY,	"CPU_DMA_LATENCY" },
+			{ PM_QOS_CPU_RESPONSE_FREQUENCY, "CPU_RESPONSE_FREQUENCY" }),
 		  __entry->value, __entry->timeout_us)
 );
 
