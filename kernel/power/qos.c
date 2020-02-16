@@ -78,9 +78,24 @@ static struct pm_qos_object cpu_dma_pm_qos = {
 	.name = "cpu_dma_latency",
 };
 
+static BLOCKING_NOTIFIER_HEAD(cpu_response_frequency_notifier);
+static struct pm_qos_constraints cpu_response_constraints = {
+	.list = PLIST_HEAD_INIT(cpu_response_constraints.list),
+	.target_value = PM_QOS_CPU_RESPONSE_FREQUENCY_DEFAULT_VALUE,
+	.default_value = PM_QOS_CPU_RESPONSE_FREQUENCY_DEFAULT_VALUE,
+	.no_constraint_value = PM_QOS_CPU_RESPONSE_FREQUENCY_DEFAULT_VALUE,
+	.type = PM_QOS_MAX,
+	.notifiers = &cpu_response_frequency_notifier,
+};
+static struct pm_qos_object cpu_response_pm_qos = {
+	.constraints = &cpu_response_constraints,
+	.name = "cpu_response_frequency",
+};
+
 static struct pm_qos_object *pm_qos_array[] = {
 	&null_pm_qos,
 	&cpu_dma_pm_qos,
+	&cpu_response_pm_qos,
 };
 
 static ssize_t pm_qos_power_write(struct file *filp, const char __user *buf,
