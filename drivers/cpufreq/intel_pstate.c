@@ -2242,7 +2242,8 @@ static void intel_pstate_adjust_pstate(struct cpudata *cpu)
 		sample->aperf,
 		sample->tsc,
 		get_avg_frequency(cpu),
-		fp_toint(cpu->iowait_boost * 100));
+		fp_toint(cpu->iowait_boost * 100),
+		cpu->vlp.status.value);
 }
 
 static void intel_pstate_adjust_pstate_range(struct cpudata *cpu,
@@ -2282,7 +2283,8 @@ static void intel_pstate_adjust_pstate_range(struct cpudata *cpu,
 			    sample->aperf,
 			    sample->tsc,
 			    get_avg_frequency(cpu),
-			    fp_toint(cpu->iowait_boost * 100));
+			    fp_toint(cpu->iowait_boost * 100),
+			    cpu->vlp.status.value);
 }
 
 static void intel_pstate_update_util(struct update_util_data *data, u64 time,
@@ -2789,7 +2791,8 @@ static void intel_cpufreq_trace(struct cpudata *cpu, unsigned int trace_type, in
 		sample->aperf,
 		sample->tsc,
 		get_avg_frequency(cpu),
-		fp_toint(cpu->iowait_boost * 100));
+		fp_toint(cpu->iowait_boost * 100),
+		0);
 }
 
 static int intel_cpufreq_target(struct cpufreq_policy *policy,
