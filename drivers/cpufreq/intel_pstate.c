@@ -2385,6 +2385,18 @@ static void intel_pstate_update_util(struct update_util_data *data, u64 time,
  * Implementation of the cpufreq update_util hook based on the LP
  * controller (see get_lp_target_range_sample()).
  */
+static void intel_pstate_update_util_lp(struct update_util_data *data,
+					u64 time, unsigned int flags)
+{
+	struct cpudata *cpu = container_of(data, struct cpudata, update_util);
+
+	if (update_lp_sample(cpu, time, flags)) {
+		const struct lp_target_range_sample *target =
+			get_lp_target_range_sample(cpu);
+		intel_pstate_adjust_pstate(cpu, get_lp_target_pstate(target));
+	}
+}
+
 static void intel_pstate_update_util_hwp_lp(struct update_util_data *data,
 					    u64 time, unsigned int flags)
 {
@@ -2415,7 +2427,7 @@ static const struct pstate_funcs silvermont_funcs = {
 	.get_val = atom_get_val,
 	.get_scaling = silvermont_get_scaling,
 	.get_vid = atom_get_vid,
-	.update_util = intel_pstate_update_util,
+	.update_util = intel_pstate_update_util_lp,
 };
 
 static const struct pstate_funcs airmont_funcs = {
@@ -2426,7 +2438,7 @@ static const struct pstate_funcs airmont_funcs = {
 	.get_val = atom_get_val,
 	.get_scaling = airmont_get_scaling,
 	.get_vid = atom_get_vid,
-	.update_util = intel_pstate_update_util,
+	.update_util = intel_pstate_update_util_lp,
 };
 
 static const struct pstate_funcs knl_funcs = {
@@ -2447,7 +2459,7 @@ static const struct pstate_funcs bxt_funcs = {
 	.get_turbo = core_get_turbo_pstate,
 	.get_scaling = core_get_scaling,
 	.get_val = core_get_val,
-	.update_util = intel_pstate_update_util,
+	.update_util = intel_pstate_update_util_lp,
 };
 
 #define ICPU(model, policy) \
@@ -2537,7 +2549,8 @@ static int intel_pstate_init_cpu(unsigned int cpunum)
 
 	intel_pstate_get_cpu_pstates(cpu);
 
-	if (pstate_funcs.update_util == intel_pstate_update_util_hwp_lp)
+	if (pstate_funcs.update_util == intel_pstate_update_util_lp ||
+	    pstate_funcs.update_util == intel_pstate_update_util_hwp_lp)
 		intel_pstate_reset_lp(cpu);
 
 	pr_debug("controlling: cpu %d\n", cpunum);
@@ -3298,9 +3311,7 @@ static int __init intel_pstate_init(void)
 	id = x86_match_cpu(hwp_support_ids);
 	if (id) {
 		copy_cpu_funcs(&core_funcs);
-		if (no_hwp) {
-			pstate_funcs.update_util = intel_pstate_update_util;
-		} else {
+		if (!no_hwp) {
 			hwp_active++;
 			pstate_funcs.update_util = intel_pstate_update_util_hwp;
 			hwp_mode_bdw = id->driver_data;
