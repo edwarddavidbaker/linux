@@ -178,7 +178,14 @@ struct vid_data {
 };
 
 enum lp_status {
-	LP_BOTTLENECK_IO = 1 << 0
+	LP_BOTTLENECK_IO = 1 << 0,
+	LP_BOTTLENECK_CPU = 1 << 1
+};
+
+struct lp_status_state_sample {
+	int32_t p_value;
+	int32_t po_avg_st_pml;
+	int32_t occ_avg_st_pml;
 };
 
 /**
@@ -200,6 +207,7 @@ struct lp_sched_info {
 struct lp_status_sample {
 	enum lp_status value;
 	int32_t realtime_avg;
+	struct lp_status_state_sample last_state[2];
 };
 
 struct lp_target_range_sample {
@@ -219,7 +227,7 @@ struct lp_data {
 	s64 sample_interval_ns;
 	int32_t gain_aggr;
 	int32_t gain_rt;
-	int32_t gain;
+	int32_t gain_st[2];
 
 	struct lp_sched_info sched;
 	struct lp_target_range_sample last_target;
@@ -338,8 +346,11 @@ struct lp_params {
 	int sample_interval_ms;
 	int setpoint_aggr_pml;
 	int setpoint_0_pml;
+	int setpoint_1_pml;
 	int avg_hz;
+	int avg_2_hz;
 	int realtime_gain_pml;
+	int state_occ_threshold_pml;
 	int debug;
 };
 
@@ -375,8 +386,11 @@ static struct lp_params lp_params __read_mostly = {
 	.sample_interval_ms = 10,
 	.setpoint_aggr_pml = 1500,
 	.setpoint_0_pml = 900,
+	.setpoint_1_pml = 50,
 	.avg_hz = 2,
+	.avg_2_hz = 10,
 	.realtime_gain_pml = 12000,
+	.state_occ_threshold_pml = 25,
 	.debug = 0,
 };
 
@@ -1887,7 +1901,8 @@ static void intel_pstate_reset_lp(struct cpudata *cpu)
 	lp->gain_aggr = max(1, div_fp(1000, lp_params.setpoint_aggr_pml));
 	lp->gain_rt = div_fp(cpu->pstate.max_pstate * lp_params.realtime_gain_pml,
 			     1000);
-	lp->gain = max(1, div_fp(1000, lp_params.setpoint_0_pml));
+	lp->gain_st[0] = max(1, div_fp(1000, lp_params.setpoint_0_pml));
+	lp->gain_st[1] = max(1, div_fp(1000, lp_params.setpoint_1_pml));
 	lp->last_target.p_base = 0;
 	lp->sched.last_response_frequency = lp_params.avg_hz;
 
@@ -1952,6 +1967,44 @@ static int32_t get_last_sample_avg_weight(struct cpudata *cpu, unsigned int hz)
 			 (hz * delta_ns) >> (ns_per_s_shift - DFRAC_BITS)));
 }
 
+static const struct lp_status_state_sample *get_lp_status_state_sample(
+	struct cpudata *cpu, unsigned int s, const int32_t po)
+{
+	struct lp_status_sample *last_status = &cpu->lp.last_target.last_status;
+	struct lp_status_state_sample *last_state = &last_status->last_state[s];
+	const unsigned int last_s = !!(last_status->value & LP_BOTTLENECK_CPU);
+
+	/*
+	 * Calculate the denormalized performance of the specified
+	 * state during the averaging period.
+	 */
+	const int32_t alpha_2 =
+		get_last_sample_avg_weight(cpu, lp_params.avg_2_hz);
+
+	const int32_t po_st_pml = last_s == s ? 1000 * po : 0;
+	const int32_t po_avg_st_pml = po_st_pml +
+		mul_fp(alpha_2, last_state->po_avg_st_pml - po_st_pml);
+
+	/*
+	 * Calculate the occupancy fraction of the specified state
+	 * during the averaging period.
+	 */
+	const int32_t occ_st_pml = last_s == s ? int_tofp(1000) : 0;
+	const int32_t occ_avg_st_pml = occ_st_pml +
+		mul_fp(alpha_2, last_state->occ_avg_st_pml - occ_st_pml);
+
+	/*
+	 * Return state updated with an estimate of the average
+	 * performance of the specified state during the fraction of
+	 * the averaging period that it was active.
+	 */
+	last_state->po_avg_st_pml = po_avg_st_pml;
+	last_state->occ_avg_st_pml = occ_avg_st_pml;
+	last_state->p_value = div_fp(po_avg_st_pml, max(1, occ_avg_st_pml));
+
+	return last_state;
+}
+
 static const struct lp_status_sample *get_lp_status_sample(
 	struct cpudata *cpu, const int32_t po)
 {
@@ -1985,6 +2038,21 @@ static const struct lp_status_sample *get_lp_status_sample(
 	const int32_t realtime_avg = realtime_sample +
 		mul_fp(alpha, last_status->realtime_avg - realtime_sample);
 
+	/*
+	 * Calculate the target state of the state machine by
+	 * selecting the state with greater observed performance.
+	 */
+	const struct lp_status_state_sample *state[] = {
+		get_lp_status_state_sample(cpu, 0, po),
+		get_lp_status_state_sample(cpu, 1, po)
+	};
+	const int32_t occ_threshold_pml =
+		int_tofp(lp_params.state_occ_threshold_pml);
+	const unsigned int s = (!bottleneck_io ? 1 :
+				state[1]->occ_avg_st_pml < occ_threshold_pml ? 1 :
+				state[0]->occ_avg_st_pml < occ_threshold_pml ? 0 :
+				!!(state[1]->p_value >= state[0]->p_value));
+
 	/* Consume the scheduling information. */
 	sched->io_wait_count = 0;
 	sched->realtime_count = 0;
@@ -1994,13 +2062,48 @@ static const struct lp_status_sample *get_lp_status_sample(
 
 	/* Update the state of the controller. */
 	last_status->realtime_avg = realtime_avg;
-	last_status->value = (bottleneck_io ? LP_BOTTLENECK_IO : 0);
+	last_status->value = (bottleneck_io ? LP_BOTTLENECK_IO : 0) |
+			     (s ? LP_BOTTLENECK_CPU : 0);
 
 	/* Update state used for tracing. */
 	cpu->sample.busy_scaled = int_tofp(sched->max_response_frequency);
 	cpu->iowait_boost = realtime_avg;
 
 	return last_status;
+}
+
+static int32_t get_lp_target_for_state(struct cpudata *cpu, unsigned int s,
+				       int32_t po_cons, int32_t po_aggr)
+{
+	struct lp_data *lp = &cpu->lp;
+
+	/*
+	 * P-state limits in fixed-point as allowed by the policy.
+	 */
+	const int32_t p0 = int_tofp(max(cpu->pstate.min_pstate,
+					cpu->min_perf_ratio));
+	const int32_t p1 = int_tofp(cpu->max_perf_ratio);
+
+	/*
+	 * Calculate target P-state from the conservative performance
+	 * estimate, correcting for overutilization.
+	 */
+	const int32_t p_tgt_cons_st = mul_fp(lp->gain_st[s], po_cons);
+	const int32_t p_tgt_aggr_st = mul_fp(lp->gain_st[s], po_aggr);
+	const int32_t p_tgt_over_st = p_tgt_cons_st <= po_aggr ||
+				      !(lp_params.debug & 1) ? 0 :
+		po_aggr + mul_fp(p1 - po_aggr,
+				 div_fp(p_tgt_cons_st - po_aggr,
+					max(1, p_tgt_aggr_st - po_aggr)));
+
+	/*
+	 * Calculate target P-state from the aggressive performance
+	 * estimate.
+	 */
+	const int32_t p_tgt_aggr = mul_fp(lp->gain_aggr, po_aggr);
+
+	return max(p0, min(p1,
+			   max(max(p_tgt_cons_st, p_tgt_over_st), p_tgt_aggr)));
 }
 
 /**
@@ -2013,13 +2116,6 @@ static const struct lp_target_range_sample *get_lp_target_range_sample(
 {
 	struct lp_data *lp = &cpu->lp;
 	struct lp_target_range_sample *last_target = &lp->last_target;
-
-	/*
-	 * P-state limits in fixed-point as allowed by the policy.
-	 */
-	const int32_t p0 = int_tofp(max(cpu->pstate.min_pstate,
-					cpu->min_perf_ratio));
-	const int32_t p1 = int_tofp(cpu->max_perf_ratio);
 
 	/*
 	 * Observed average P-state during the sampling period.  The
@@ -2053,11 +2149,15 @@ static const struct lp_target_range_sample *get_lp_target_range_sample(
 		get_lp_status_sample(cpu, po_cons);
 
 	/* Calculate the target P-state range. */
-	const int32_t p_tgt_cons = mul_fp(lp->gain, po_cons);
-	const int32_t p_tgt_aggr = mul_fp(lp->gain_aggr, po_aggr);
-	const int32_t p_tgt = max(p0, min(p1, max(p_tgt_cons, p_tgt_aggr)));
+	const int32_t p_tgt_st[] = {
+		get_lp_target_for_state(cpu, 0, po_cons, po_aggr),
+		get_lp_target_for_state(cpu, 1, po_cons, po_aggr)
+	};
 
 	/* Calculate the realtime P-state target lower bound. */
+	const int32_t p0 = int_tofp(max(cpu->pstate.min_pstate,
+					cpu->min_perf_ratio));
+	const int32_t p1 = int_tofp(cpu->max_perf_ratio);
 	const int32_t pm = int_tofp(cpu->pstate.max_pstate);
 	const int32_t p_tgt_rt = min(pm,
 				     mul_fp(lp->gain_rt, status->realtime_avg));
@@ -2109,8 +2209,8 @@ static const struct lp_target_range_sample *get_lp_target_range_sample(
 	const int32_t alpha = get_last_sample_avg_weight(
 		cpu, lp->sched.last_response_frequency);
 
-	last_target->p_base = p_tgt + mul_fp(alpha,
-					     last_target->p_base - p_tgt);
+	last_target->p_base = p_tgt_st[0] +
+		mul_fp(alpha, last_target->p_base - p_tgt_st[0]);
 
 	/*
 	 * Use the low-pass-filtered controller response for better
@@ -2121,12 +2221,20 @@ static const struct lp_target_range_sample *get_lp_target_range_sample(
 	if ((status->value & LP_BOTTLENECK_IO)) {
 		last_target->value[0] = rnd_fp(p0);
 		last_target->value[1] = rnd_fp(last_target->p_base);
+	} else if ((lp_params.debug & 8)) {
+		last_target->value[0] = rnd_fp(max(p_tgt_rt, p_tgt_st[0]));
+		last_target->value[1] = rnd_fp(max(p_tgt_rt, p_tgt_st[1]));
 	} else {
 		last_target->value[0] = rnd_fp(p_tgt_rt);
 		last_target->value[1] = rnd_fp(p1);
 	}
 
 	return last_target;
+}
+
+static int32_t get_lp_target_pstate(const struct lp_target_range_sample *target)
+{
+	return target->value[!!(target->last_status.value & LP_BOTTLENECK_CPU)];
 }
 
 static bool update_lp_sample(struct cpudata *cpu, u64 time, unsigned int flags)
