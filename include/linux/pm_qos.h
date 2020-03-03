@@ -28,6 +28,7 @@ enum pm_qos_flags_status {
 #define PM_QOS_LATENCY_ANY_NS	((s64)PM_QOS_LATENCY_ANY * NSEC_PER_USEC)
 
 #define PM_QOS_CPU_LATENCY_DEFAULT_VALUE	(2000 * USEC_PER_SEC)
+#define PM_QOS_CPU_SCALING_RESPONSE_DEFAULT_VALUE 0
 #define PM_QOS_RESUME_LATENCY_DEFAULT_VALUE	PM_QOS_LATENCY_ANY
 #define PM_QOS_RESUME_LATENCY_NO_CONSTRAINT	PM_QOS_LATENCY_ANY
 #define PM_QOS_RESUME_LATENCY_NO_CONSTRAINT_NS	PM_QOS_LATENCY_ANY_NS
@@ -161,6 +162,14 @@ static inline void cpu_latency_qos_update_request(struct pm_qos_request *req,
 						  s32 new_value) {}
 static inline void cpu_latency_qos_remove_request(struct pm_qos_request *req) {}
 #endif
+
+s32 cpu_scaling_response_qos_limit(void);
+bool cpu_scaling_response_qos_request_active(struct pm_qos_request *req);
+void cpu_scaling_response_qos_add_request(struct pm_qos_request *req,
+					  s32 value);
+void cpu_scaling_response_qos_update_request(struct pm_qos_request *req,
+					     s32 new_value);
+void cpu_scaling_response_qos_remove_request(struct pm_qos_request *req);
 
 #ifdef CONFIG_PM
 enum pm_qos_flags_status __dev_pm_qos_flags(struct device *dev, s32 mask);
