@@ -271,7 +271,7 @@ void cpu_latency_qos_add_request(struct pm_qos_request *req, s32 value)
 		return;
 	}
 
-	trace_pm_qos_add_request(value);
+	trace_pm_qos_add_request("CPU_DMA_LATENCY", value);
 
 	req->qos = &cpu_latency_constraints;
 	cpu_latency_qos_apply(req, PM_QOS_ADD_REQ, value);
@@ -297,7 +297,7 @@ void cpu_latency_qos_update_request(struct pm_qos_request *req, s32 new_value)
 		return;
 	}
 
-	trace_pm_qos_update_request(new_value);
+	trace_pm_qos_update_request("CPU_DMA_LATENCY", new_value);
 
 	if (new_value == req->node.prio)
 		return;
@@ -323,7 +323,7 @@ void cpu_latency_qos_remove_request(struct pm_qos_request *req)
 		return;
 	}
 
-	trace_pm_qos_remove_request(PM_QOS_DEFAULT_VALUE);
+	trace_pm_qos_remove_request("CPU_DMA_LATENCY", PM_QOS_DEFAULT_VALUE);
 
 	cpu_latency_qos_apply(req, PM_QOS_REMOVE_REQ, PM_QOS_DEFAULT_VALUE);
 	memset(req, 0, sizeof(*req));
@@ -423,6 +423,131 @@ static int __init cpu_latency_qos_init(void)
 }
 late_initcall(cpu_latency_qos_init);
 #endif /* CONFIG_CPU_IDLE */
+
+/* Definitions related to the CPU scaling response frequency QoS. */
+
+static struct pm_qos_constraints cpu_scaling_response_constraints = {
+	.list = PLIST_HEAD_INIT(cpu_scaling_response_constraints.list),
+	.target_value = PM_QOS_CPU_SCALING_RESPONSE_DEFAULT_VALUE,
+	.default_value = PM_QOS_CPU_SCALING_RESPONSE_DEFAULT_VALUE,
+	.no_constraint_value = PM_QOS_CPU_SCALING_RESPONSE_DEFAULT_VALUE,
+	.type = PM_QOS_MAX,
+};
+
+/**
+ * cpu_scaling_response_qos_limit - Return current system-wide CPU
+ *				    scaling response frequency QoS limit.
+ */
+s32 cpu_scaling_response_qos_limit(void)
+{
+	return pm_qos_read_value(&cpu_scaling_response_constraints);
+}
+EXPORT_SYMBOL_GPL(cpu_scaling_response_qos_limit);
+
+/**
+ * cpu_scaling_response_qos_request_active - Check the given PM QoS request.
+ * @req: PM QoS request to check.
+ *
+ * Return: 'true' if @req has been added to the CPU response frequency
+ * QoS list, 'false' otherwise.
+ */
+bool cpu_scaling_response_qos_request_active(struct pm_qos_request *req)
+{
+	return req->qos == &cpu_scaling_response_constraints;
+}
+EXPORT_SYMBOL_GPL(cpu_scaling_response_qos_request_active);
+
+/**
+ * cpu_scaling_response_qos_add_request - Add new CPU scaling response
+ *					  frequency QoS request.
+ * @req: Pointer to a preallocated handle.
+ * @value: Requested constraint value.
+ *
+ * Use @value to initialize the request handle pointed to by @req,
+ * insert it as a new entry to the CPU scaling response frequency QoS
+ * list and recompute the effective QoS constraint for that list.
+ *
+ * Callers need to save the handle for later use in updates and removal of the
+ * QoS request represented by it.
+ */
+void cpu_scaling_response_qos_add_request(struct pm_qos_request *req,
+					  s32 value)
+{
+	if (!req)
+		return;
+
+	if (cpu_scaling_response_qos_request_active(req)) {
+		WARN(1, KERN_ERR "%s called for already added request\n",
+		     __func__);
+		return;
+	}
+
+	trace_pm_qos_add_request("CPU_SCALING_RESPONSE", value);
+
+	req->qos = &cpu_scaling_response_constraints;
+	pm_qos_update_target(req->qos, &req->node, PM_QOS_ADD_REQ, value);
+}
+EXPORT_SYMBOL_GPL(cpu_scaling_response_qos_add_request);
+
+/**
+ * cpu_scaling_response_qos_update_request - Modify existing CPU scaling
+ *					     response frequency QoS request.
+ * @req : QoS request to update.
+ * @new_value: New requested constraint value.
+ *
+ * Use @new_value to update the QoS request represented by @req in the
+ * CPU scaling response frequency QoS list along with updating the
+ * effective constraint value for that list.
+ */
+void cpu_scaling_response_qos_update_request(struct pm_qos_request *req,
+					     s32 new_value)
+{
+	if (!req)
+		return;
+
+	if (!cpu_scaling_response_qos_request_active(req)) {
+		WARN(1, KERN_ERR "%s called for unknown object\n", __func__);
+		return;
+	}
+
+	trace_pm_qos_update_request("CPU_SCALING_RESPONSE", new_value);
+
+	if (new_value == req->node.prio)
+		return;
+
+	pm_qos_update_target(req->qos, &req->node, PM_QOS_UPDATE_REQ,
+			     new_value);
+}
+EXPORT_SYMBOL_GPL(cpu_scaling_response_qos_update_request);
+
+/**
+ * cpu_scaling_response_qos_remove_request - Remove existing CPU
+ *					     scaling response
+ *					     frequency QoS request.
+ * @req: QoS request to remove.
+ *
+ * Remove the CPU scaling response frequency QoS request represented
+ * by @req from the CPU scaling response frequency QoS list along with
+ * updating the effective constraint value for that list.
+ */
+void cpu_scaling_response_qos_remove_request(struct pm_qos_request *req)
+{
+	if (!req)
+		return;
+
+	if (!cpu_scaling_response_qos_request_active(req)) {
+		WARN(1, KERN_ERR "%s called for unknown object\n", __func__);
+		return;
+	}
+
+	trace_pm_qos_remove_request("CPU_SCALING_RESPONSE",
+				    PM_QOS_DEFAULT_VALUE);
+
+	pm_qos_update_target(req->qos, &req->node, PM_QOS_REMOVE_REQ,
+			     PM_QOS_DEFAULT_VALUE);
+	memset(req, 0, sizeof(*req));
+}
+EXPORT_SYMBOL_GPL(cpu_scaling_response_qos_remove_request);
 
 /* Definitions related to the frequency QoS below. */
 

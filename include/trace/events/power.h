@@ -359,45 +359,48 @@ DEFINE_EVENT(power_domain, power_domain_target,
 );
 
 /*
- * CPU latency QoS events used for global CPU latency QoS list updates
+ * CPU latency/scaling response frequency QoS events used for global
+ * CPU PM QoS list updates.
  */
-DECLARE_EVENT_CLASS(cpu_latency_qos_request,
+DECLARE_EVENT_CLASS(pm_qos_request,
 
-	TP_PROTO(s32 value),
+	TP_PROTO(const char *name, s32 value),
 
-	TP_ARGS(value),
+	TP_ARGS(name, value),
 
 	TP_STRUCT__entry(
+		__string(name,			 name		)
 		__field( s32,                    value          )
 	),
 
 	TP_fast_assign(
+		__assign_str(name, name);
 		__entry->value = value;
 	),
 
-	TP_printk("CPU_DMA_LATENCY value=%d",
-		  __entry->value)
+	TP_printk("pm_qos_class=%s value=%d",
+		  __get_str(name), __entry->value)
 );
 
-DEFINE_EVENT(cpu_latency_qos_request, pm_qos_add_request,
+DEFINE_EVENT(pm_qos_request, pm_qos_add_request,
 
-	TP_PROTO(s32 value),
+	TP_PROTO(const char *name, s32 value),
 
-	TP_ARGS(value)
+	TP_ARGS(name, value)
 );
 
-DEFINE_EVENT(cpu_latency_qos_request, pm_qos_update_request,
+DEFINE_EVENT(pm_qos_request, pm_qos_update_request,
 
-	TP_PROTO(s32 value),
+	TP_PROTO(const char *name, s32 value),
 
-	TP_ARGS(value)
+	TP_ARGS(name, value)
 );
 
-DEFINE_EVENT(cpu_latency_qos_request, pm_qos_remove_request,
+DEFINE_EVENT(pm_qos_request, pm_qos_remove_request,
 
-	TP_PROTO(s32 value),
+	TP_PROTO(const char *name, s32 value),
 
-	TP_ARGS(value)
+	TP_ARGS(name, value)
 );
 
 /*
