@@ -10,6 +10,7 @@
 #include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/notifier.h>
+#include <linux/pm_qos.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
 
@@ -97,6 +98,54 @@ struct intel_gt {
 	 * Reserved for exclusive use by the kernel.
 	 */
 	struct i915_address_space *vm;
+
+	/**
+	 * CPU response frequency QoS tracking.
+	 */
+	struct {
+		/** PM QoS request of this device. */
+		struct pm_qos_request req;
+
+		/** Timer used for delayed update of the PM QoS request. */
+		struct timer_list timer;
+
+		/** Response frequency target to use in GPU-bound conditions. */
+		uint32_t target_hz;
+
+		/**
+		 * Maximum delay before the PM QoS request is updated
+		 * after we become GPU-bound.
+		 */
+		uint32_t delay_max_ns;
+
+		/**
+		 * Exponent of delay slope used when the workload
+		 * becomes non-GPU-bound, used to provide greater
+		 * sensitivity to periods of GPU inactivity which may
+		 * indicate that the workload is latency-bound.
+		 */
+		uint32_t delay_slope_shift;
+
+		/**
+		 * Last time intel_gt_pm_active_begin() was called to
+		 * indicate that the GPU is a bottleneck.
+		 */
+		atomic64_t time_set_ns;
+
+		/**
+		 * Last time intel_gt_pm_active_end() was called to
+		 * indicate that the GPU is no longer a bottleneck.
+		 */
+		atomic64_t time_clear_ns;
+
+		/**
+		 * Number of times intel_gt_pm_active_begin() was
+		 * called without a matching intel_gt_pm_active_end().
+		 * Will be greater than zero if the GPU is currently
+		 * considered to be a bottleneck.
+		 */
+		atomic_t active_count;
+	} sf_qos;
 };
 
 enum intel_gt_scratch_field {

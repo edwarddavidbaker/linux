@@ -275,6 +275,17 @@ struct intel_engine_execlists {
 	 */
 	u8 csb_head;
 
+	/**
+	 * @overload: whether at least two execlist ports are
+	 * currently submitted to the hardware, indicating that CPU
+	 * latency isn't critical in order to maintain the GPU busy.
+	 * We use that to trigger a more energy-efficient response
+	 * mode of CPU power management, since performance degradation
+	 * is unlikely under those conditions, and GPU throughput may
+	 * benefit from the increased TDP budget.
+	 */
+	atomic_t overload;
+
 	I915_SELFTEST_DECLARE(struct st_preempt_hang preempt_hang;)
 };
 

@@ -2365,6 +2365,12 @@ cancel_port_requests(struct intel_engine_execlists * const execlists)
 
 	smp_wmb(); /* complete the seqlock for execlists_active() */
 	WRITE_ONCE(execlists->active, execlists->inflight);
+
+	if (atomic_xchg(&execlists->overload, 0)) {
+		struct intel_engine_cs *engine =
+			container_of(execlists, typeof(*engine), execlists);
+		intel_gt_pm_active_end(engine->gt);
+	}
 }
 
 static inline void
@@ -2533,11 +2539,22 @@ static void process_csb(struct intel_engine_cs *engine)
 			WRITE_ONCE(execlists->active, execlists->inflight);
 
 			WRITE_ONCE(execlists->pending[0], NULL);
+
+                        if (execlists->inflight[1]) {
+                                if (!atomic_xchg(&execlists->overload, 1))
+                                        intel_gt_pm_active_begin(engine->gt);
+                        } else {
+                                if (atomic_xchg(&execlists->overload, 0))
+                                        intel_gt_pm_active_end(engine->gt);
+                        }
 		} else {
 			GEM_BUG_ON(!*execlists->active);
 
 			/* port0 completed, advanced to port1 */
 			trace_ports(execlists, "completed", execlists->active);
+
+                        if (atomic_xchg(&execlists->overload, 0))
+                                intel_gt_pm_active_end(engine->gt);
 
 			/*
 			 * We rely on the hardware being strongly

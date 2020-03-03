@@ -107,6 +107,102 @@ void intel_gt_pm_init_early(struct intel_gt *gt)
 	intel_wakeref_init(&gt->wakeref, gt->uncore->rpm, &wf_ops);
 }
 
+/**
+ * Time increment until the most immediate PM QoS scaling response
+ * frequency update.
+ *
+ * May be in the future (return value > 0) if the GPU is currently
+ * active but we haven't updated the PM QoS request to reflect a
+ * bottleneck yet.  May be in the past (return value < 0) if the GPU
+ * isn't fully utilized and we've already reset the PM QoS request to
+ * the default value.  May be zero if a PM QoS request update is due.
+ *
+ * The time increment returned by this function decreases linearly
+ * with time until it reaches either zero or a configurable limit.
+ */
+static int32_t time_to_sf_qos_update_ns(struct intel_gt *gt)
+{
+	const uint64_t t1 = ktime_get_ns();
+	const uint64_t dt1 = gt->sf_qos.delay_max_ns;
+
+	if (atomic_read_acquire(&gt->sf_qos.active_count)) {
+		const uint64_t t0 = atomic64_read(&gt->sf_qos.time_set_ns);
+
+		return min(dt1, t0 <= t1 ? 0 : t0 - t1);
+	} else {
+		const uint64_t t0 = atomic64_read(&gt->sf_qos.time_clear_ns);
+		const unsigned int shift = gt->sf_qos.delay_slope_shift;
+
+		return -(int32_t)(t1 <= t0 ? 1 :
+				  min(dt1, (t1 - t0) << shift));
+	}
+}
+
+/**
+ * Perform a delayed PM QoS scaling response frequency update.
+ */
+static void intel_gt_sf_qos_update(struct intel_gt *gt)
+{
+	const uint32_t dt = max(0, time_to_sf_qos_update_ns(gt));
+
+	timer_reduce(&gt->sf_qos.timer, jiffies + nsecs_to_jiffies(dt));
+}
+
+/**
+ * Timer that fires once the delay used to switch the PM QoS scaling
+ * response frequency request has elapsed.
+ */
+static void intel_gt_sf_qos_timeout(struct timer_list *timer)
+{
+	struct intel_gt *gt = container_of(timer, struct intel_gt,
+					   sf_qos.timer);
+	const int32_t dt = time_to_sf_qos_update_ns(gt);
+
+	if (dt == 0)
+		cpu_scaling_response_qos_update_request(
+			&gt->sf_qos.req, gt->sf_qos.target_hz);
+	else
+		cpu_scaling_response_qos_update_request(
+			&gt->sf_qos.req, PM_QOS_DEFAULT_VALUE);
+
+	if (dt > 0)
+		intel_gt_sf_qos_update(gt);
+}
+
+/**
+ * Report the beginning of a period of GPU utilization to PM.
+ *
+ * May trigger a more energy-efficient response mode in CPU PM, but
+ * only after a certain delay has elapsed so we don't have a negative
+ * impact on the CPU ramp-up latency except after the GPU has been
+ * continuously utilized for a long enough period of time.
+ */
+void intel_gt_pm_active_begin(struct intel_gt *gt)
+{
+	const uint32_t dt = abs(time_to_sf_qos_update_ns(gt));
+
+	atomic64_set(&gt->sf_qos.time_set_ns, ktime_get_ns() + dt);
+
+	if (!atomic_fetch_inc_release(&gt->sf_qos.active_count))
+		intel_gt_sf_qos_update(gt);
+}
+
+/**
+ * Report the end of a period of GPU utilization to PM.
+ *
+ * Must be called once after each call to intel_gt_pm_active_begin().
+ */
+void intel_gt_pm_active_end(struct intel_gt *gt)
+{
+	const uint32_t dt = abs(time_to_sf_qos_update_ns(gt));
+	const unsigned int shift = gt->sf_qos.delay_slope_shift;
+
+	atomic64_set(&gt->sf_qos.time_clear_ns, ktime_get_ns() - (dt >> shift));
+
+	if (!atomic_dec_return_release(&gt->sf_qos.active_count))
+		intel_gt_sf_qos_update(gt);
+}
+
 void intel_gt_pm_init(struct intel_gt *gt)
 {
 	/*
@@ -116,6 +212,14 @@ void intel_gt_pm_init(struct intel_gt *gt)
 	 */
 	intel_rc6_init(&gt->rc6);
 	intel_rps_init(&gt->rps);
+
+	cpu_scaling_response_qos_add_request(&gt->sf_qos.req,
+					     PM_QOS_DEFAULT_VALUE);
+
+	gt->sf_qos.delay_max_ns = 10000000;
+	gt->sf_qos.delay_slope_shift = 1;
+	gt->sf_qos.target_hz = 2;
+	timer_setup(&gt->sf_qos.timer, intel_gt_sf_qos_timeout, 0);
 }
 
 static bool reset_engines(struct intel_gt *gt)
@@ -174,6 +278,9 @@ static void gt_sanitize(struct intel_gt *gt, bool force)
 
 void intel_gt_pm_fini(struct intel_gt *gt)
 {
+	del_timer_sync(&gt->sf_qos.timer);
+	cpu_scaling_response_qos_remove_request(&gt->sf_qos.req);
+
 	intel_rc6_fini(&gt->rc6);
 }
 
