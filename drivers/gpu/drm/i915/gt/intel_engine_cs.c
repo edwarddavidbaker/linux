@@ -504,6 +504,7 @@ void intel_engine_init_execlists(struct intel_engine_cs *engine)
 
 	execlists->queue_priority_hint = INT_MIN;
 	execlists->queue = RB_ROOT_CACHED;
+	atomic_set(&execlists->overload, 0);
 }
 
 static void cleanup_status_page(struct intel_engine_cs *engine)

@@ -10,6 +10,7 @@
 #include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/notifier.h>
+#include <linux/pm_qos.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
 
@@ -97,6 +98,17 @@ struct intel_gt {
 	 * Reserved for exclusive use by the kernel.
 	 */
 	struct i915_address_space *vm;
+
+	struct {
+		struct pm_qos_request req;
+		struct timer_list timer;
+		uint32_t target_hz;
+		uint32_t delay_max_ns;
+		uint32_t delay_slope_shift;
+		atomic64_t time_set_ns;
+		atomic64_t time_clear_ns;
+		atomic_t active_count;
+	} rf_qos;
 };
 
 enum intel_gt_scratch_field {
