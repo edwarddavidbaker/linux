@@ -20,6 +20,7 @@
 #include "intel_gt_buffer_pool_types.h"
 #include "intel_llc_types.h"
 #include "intel_reset_types.h"
+#include "intel_qos_types.h"
 #include "intel_rc6_types.h"
 #include "intel_rps_types.h"
 #include "intel_wakeref.h"
@@ -79,6 +80,7 @@ struct intel_gt {
 	struct intel_llc llc;
 	struct intel_rc6 rc6;
 	struct intel_rps rps;
+	struct intel_qos qos; /** CPU response frequency QoS tracking.  */
 
 	spinlock_t irq_lock;
 	u32 gt_imr;
