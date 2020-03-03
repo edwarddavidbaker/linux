@@ -105,6 +105,7 @@ gt-y += \
 	gt/intel_lrc.o \
 	gt/intel_mocs.o \
 	gt/intel_ppgtt.o \
+	gt/intel_qos.o \
 	gt/intel_rc6.o \
 	gt/intel_renderstate.o \
 	gt/intel_reset.o \

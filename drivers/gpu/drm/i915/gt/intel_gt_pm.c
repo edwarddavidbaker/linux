@@ -17,6 +17,7 @@
 #include "intel_gt_requests.h"
 #include "intel_llc.h"
 #include "intel_pm.h"
+#include "intel_qos.h"
 #include "intel_rc6.h"
 #include "intel_rps.h"
 #include "intel_wakeref.h"
@@ -117,6 +118,7 @@ void intel_gt_pm_init(struct intel_gt *gt)
 	 */
 	intel_rc6_init(&gt->rc6);
 	intel_rps_init(&gt->rps);
+	intel_qos_init(&gt->qos);
 }
 
 static bool reset_engines(struct intel_gt *gt)
@@ -179,6 +181,7 @@ static void gt_sanitize(struct intel_gt *gt, bool force)
 
 void intel_gt_pm_fini(struct intel_gt *gt)
 {
+	intel_qos_fini(&gt->qos);
 	intel_rc6_fini(&gt->rc6);
 }
 

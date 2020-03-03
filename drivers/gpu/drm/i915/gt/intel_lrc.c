@@ -144,6 +144,7 @@
 #include "intel_gt_requests.h"
 #include "intel_lrc_reg.h"
 #include "intel_mocs.h"
+#include "intel_qos.h"
 #include "intel_reset.h"
 #include "intel_ring.h"
 #include "intel_workarounds.h"
@@ -2466,6 +2467,12 @@ cancel_port_requests(struct intel_engine_execlists * const execlists)
 
 	smp_wmb(); /* complete the seqlock for execlists_active() */
 	WRITE_ONCE(execlists->active, execlists->inflight);
+
+	if (atomic_xchg(&execlists->overload, 0)) {
+		struct intel_engine_cs *engine =
+			container_of(execlists, typeof(*engine), execlists);
+		intel_qos_overload_end(&engine->gt->qos);
+	}
 }
 
 static inline void
@@ -2656,6 +2663,14 @@ static void process_csb(struct intel_engine_cs *engine)
 			WRITE_ONCE(execlists->active, execlists->inflight);
 
 			WRITE_ONCE(execlists->pending[0], NULL);
+
+			if (execlists->inflight[1]) {
+				if (!atomic_xchg(&execlists->overload, 1))
+					intel_qos_overload_begin(&engine->gt->qos);
+			} else {
+				if (atomic_xchg(&execlists->overload, 0))
+					intel_qos_overload_end(&engine->gt->qos);
+			}
 		} else {
 			if (GEM_WARN_ON(!*execlists->active)) {
 				execlists->error_interrupt |= ERROR_CSB;
@@ -2664,6 +2679,9 @@ static void process_csb(struct intel_engine_cs *engine)
 
 			/* port0 completed, advanced to port1 */
 			trace_ports(execlists, "completed", execlists->active);
+
+			if (atomic_xchg(&execlists->overload, 0))
+				intel_qos_overload_end(&engine->gt->qos);
 
 			/*
 			 * We rely on the hardware being strongly
