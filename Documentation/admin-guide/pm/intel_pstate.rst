@@ -669,6 +669,13 @@ of them have to be prepended with the ``intel_pstate=`` prefix.
 	Use per-logical-CPU P-State limits (see `Coordination of P-state
 	Limits`_ for details).
 
+``vlp``
+	Force use of VLP P-state controller.  Overrides selection derived
+	from ACPI FADT profile.
+
+``no_vlp``
+	Prevent use of VLP P-state controller (see "vlp" parameter).
+
 
 Diagnostics and Tuning
 ======================
