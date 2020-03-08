@@ -1086,6 +1086,9 @@ static struct vlp_param vlp_files[] = {
 	{NULL, NULL, }
 };
 
+static void intel_pstate_update_util_vlp(struct update_util_data *data,
+					 u64 time, unsigned int flags);
+
 static void intel_pstate_update_util_hwp_vlp(struct update_util_data *data,
 					     u64 time, unsigned int flags);
 
@@ -1093,7 +1096,8 @@ static void intel_pstate_debug_expose_params(void)
 {
 	int i;
 
-	if (pstate_funcs.update_util != intel_pstate_update_util_hwp_vlp)
+	if (pstate_funcs.update_util != intel_pstate_update_util_vlp &&
+	    pstate_funcs.update_util != intel_pstate_update_util_hwp_vlp)
 		return;
 
 	debugfs_parent = debugfs_create_dir("pstate_snb", NULL);
@@ -2527,6 +2531,18 @@ static void intel_pstate_update_util(struct update_util_data *data, u64 time,
  * Implementation of the cpufreq update_util hook based on the VLP
  * controller (see get_vlp_target_range()).
  */
+static void intel_pstate_update_util_vlp(struct update_util_data *data,
+					 u64 time, unsigned int flags)
+{
+	struct cpudata *cpu = container_of(data, struct cpudata, update_util);
+
+	if (update_vlp_sample(cpu, time, flags)) {
+		const int32_t target = get_vlp_target_pstate(cpu);
+
+		intel_pstate_adjust_pstate(cpu, target);
+	}
+}
+
 static void intel_pstate_update_util_hwp_vlp(struct update_util_data *data,
 					     u64 time, unsigned int flags)
 {
@@ -2678,7 +2694,8 @@ static int intel_pstate_init_cpu(unsigned int cpunum)
 
 	intel_pstate_get_cpu_pstates(cpu);
 
-	if (pstate_funcs.update_util == intel_pstate_update_util_hwp_vlp)
+	if (pstate_funcs.update_util == intel_pstate_update_util_vlp ||
+	    pstate_funcs.update_util == intel_pstate_update_util_hwp_vlp)
 		intel_pstate_reset_vlp(cpu);
 
 	pr_debug("controlling: cpu %d\n", cpunum);
@@ -3447,9 +3464,7 @@ static int __init intel_pstate_init(void)
 	id = x86_match_cpu(hwp_support_ids);
 	if (id) {
 		copy_cpu_funcs(&core_funcs);
-		if (no_hwp) {
-			pstate_funcs.update_util = intel_pstate_update_util;
-		} else {
+		if (!no_hwp) {
 			hwp_active++;
 
 			if (vlp < 0 && !intel_pstate_acpi_pm_profile_server() &&
@@ -3476,6 +3491,9 @@ static int __init intel_pstate_init(void)
 
 		copy_cpu_funcs((struct pstate_funcs *)id->driver_data);
 	}
+
+	if (!use_vlp)
+		pstate_funcs.update_util = intel_pstate_update_util;
 
 	if (intel_pstate_msrs_not_valid()) {
 		pr_info("Invalid MSRs\n");
