@@ -1785,6 +1785,11 @@
 			per_cpu_perf_limits
 			  Allow per-logical-CPU P-State performance control limits using
 			  cpufreq sysfs interface
+			vlp
+			  Force use of VLP P-state controller.  Overrides selection
+			  derived from ACPI FADT profile.
+			no_vlp
+			  Prevent use of VLP P-state controller (see "vlp" parameter).
 
 	intremap=	[X86-64, Intel-IOMMU]
 			on	enable Interrupt Remapping (default)

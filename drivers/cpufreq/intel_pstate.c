@@ -3036,6 +3036,7 @@ static int intel_pstate_update_status(const char *buf, size_t size)
 
 static int no_load __initdata;
 static int no_hwp __initdata;
+static int vlp __initdata = -1;
 static int hwp_only __initdata;
 static unsigned int force_load __initdata;
 
@@ -3200,6 +3201,7 @@ static inline void intel_pstate_request_control_from_smm(void) {}
 #endif /* CONFIG_ACPI */
 
 #define INTEL_PSTATE_HWP_BROADWELL	0x01
+#define INTEL_PSTATE_HWP_VLP		0x02
 
 #define ICPU_HWP(model, hwp_mode) \
 	{ X86_VENDOR_INTEL, 6, model, X86_FEATURE_HWP, hwp_mode }
@@ -3207,12 +3209,15 @@ static inline void intel_pstate_request_control_from_smm(void) {}
 static const struct x86_cpu_id hwp_support_ids[] __initconst = {
 	ICPU_HWP(INTEL_FAM6_BROADWELL_X, INTEL_PSTATE_HWP_BROADWELL),
 	ICPU_HWP(INTEL_FAM6_BROADWELL_D, INTEL_PSTATE_HWP_BROADWELL),
+	ICPU_HWP(INTEL_FAM6_ICELAKE, INTEL_PSTATE_HWP_VLP),
+	ICPU_HWP(INTEL_FAM6_ICELAKE_L, INTEL_PSTATE_HWP_VLP),
 	ICPU_HWP(X86_MODEL_ANY, 0),
 	{}
 };
 
 static int __init intel_pstate_init(void)
 {
+	bool use_vlp = vlp == 1;
 	const struct x86_cpu_id *id;
 	int rc;
 
@@ -3229,8 +3234,19 @@ static int __init intel_pstate_init(void)
 			pstate_funcs.update_util = intel_pstate_update_util;
 		} else {
 			hwp_active++;
-			pstate_funcs.update_util = intel_pstate_update_util_hwp;
-			hwp_mode_bdw = id->driver_data;
+
+			if (vlp < 0 && !intel_pstate_acpi_pm_profile_server() &&
+			    (id->driver_data & INTEL_PSTATE_HWP_VLP)) {
+				/* Enable VLP controller by default. */
+				use_vlp = true;
+			}
+
+			pstate_funcs.update_util = use_vlp ?
+				intel_pstate_update_util_hwp_vlp :
+				intel_pstate_update_util_hwp;
+
+			hwp_mode_bdw = (id->driver_data &
+					INTEL_PSTATE_HWP_BROADWELL);
 			intel_pstate.attr = hwp_cpufreq_attrs;
 			goto hwp_cpu_matched;
 		}
@@ -3307,6 +3323,11 @@ static int __init intel_pstate_setup(char *str)
 		hwp_only = 1;
 	if (!strcmp(str, "per_cpu_perf_limits"))
 		per_cpu_limits = true;
+
+	if (!strcmp(str, "vlp"))
+		vlp = 1;
+	if (!strcmp(str, "no_vlp"))
+		vlp = 0;
 
 #ifdef CONFIG_ACPI
 	if (!strcmp(str, "support_acpi_ppc"))
