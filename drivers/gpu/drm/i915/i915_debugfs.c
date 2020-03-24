@@ -2069,6 +2069,72 @@ static const struct file_operations i915_guc_log_relay_fops = {
 	.release = i915_guc_log_relay_release,
 };
 
+static int
+i915_rf_qos_delay_max_ns_set(void *data, u64 val)
+{
+	struct drm_i915_private *dev_priv = data;
+
+	WRITE_ONCE(dev_priv->gt.rf_qos.delay_max_ns, val);
+	return 0;
+}
+
+static int
+i915_rf_qos_delay_max_ns_get(void *data, u64 *val)
+{
+	struct drm_i915_private *dev_priv = data;
+
+	*val = READ_ONCE(dev_priv->gt.rf_qos.delay_max_ns);
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(i915_rf_qos_delay_max_ns_fops,
+			i915_rf_qos_delay_max_ns_get,
+			i915_rf_qos_delay_max_ns_set, "%llu\n");
+
+static int
+i915_rf_qos_delay_slope_shift_set(void *data, u64 val)
+{
+	struct drm_i915_private *dev_priv = data;
+
+	WRITE_ONCE(dev_priv->gt.rf_qos.delay_slope_shift, val);
+	return 0;
+}
+
+static int
+i915_rf_qos_delay_slope_shift_get(void *data, u64 *val)
+{
+	struct drm_i915_private *dev_priv = data;
+
+	*val = READ_ONCE(dev_priv->gt.rf_qos.delay_slope_shift);
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(i915_rf_qos_delay_slope_shift_fops,
+			i915_rf_qos_delay_slope_shift_get,
+			i915_rf_qos_delay_slope_shift_set, "%llu\n");
+
+static int
+i915_rf_qos_target_hz_set(void *data, u64 val)
+{
+	struct drm_i915_private *dev_priv = data;
+
+	WRITE_ONCE(dev_priv->gt.rf_qos.target_hz, val);
+	return 0;
+}
+
+static int
+i915_rf_qos_target_hz_get(void *data, u64 *val)
+{
+	struct drm_i915_private *dev_priv = data;
+
+	*val = READ_ONCE(dev_priv->gt.rf_qos.target_hz);
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(i915_rf_qos_target_hz_fops,
+			i915_rf_qos_target_hz_get,
+			i915_rf_qos_target_hz_set, "%llu\n");
+
 static int i915_psr_sink_status_show(struct seq_file *m, void *data)
 {
 	u8 val;
@@ -4360,7 +4426,10 @@ static const struct i915_debugfs_files {
 	{"i915_hpd_short_storm_ctl", &i915_hpd_short_storm_ctl_fops},
 	{"i915_ipc_status", &i915_ipc_status_fops},
 	{"i915_drrs_ctl", &i915_drrs_ctl_fops},
-	{"i915_edp_psr_debug", &i915_edp_psr_debug_fops}
+	{"i915_edp_psr_debug", &i915_edp_psr_debug_fops},
+	{"i915_rf_qos_delay_max_ns", &i915_rf_qos_delay_max_ns_fops},
+	{"i915_rf_qos_delay_slope_shift", &i915_rf_qos_delay_slope_shift_fops},
+	{"i915_rf_qos_target_hz", &i915_rf_qos_target_hz_fops}
 };
 
 int i915_debugfs_register(struct drm_i915_private *dev_priv)
