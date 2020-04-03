@@ -1336,6 +1336,28 @@ DEFINE_SIMPLE_ATTRIBUTE(i915_sf_qos_target_hz_fops,
 			i915_sf_qos_target_hz_get,
 			i915_sf_qos_target_hz_set, "%llu\n");
 
+static int
+i915_sf_qos_debug_set(void *data, u64 val)
+{
+	struct drm_i915_private *dev_priv = data;
+
+	WRITE_ONCE(dev_priv->gt.qos.debug, val);
+	return 0;
+}
+
+static int
+i915_sf_qos_debug_get(void *data, u64 *val)
+{
+	struct drm_i915_private *dev_priv = data;
+
+	*val = READ_ONCE(dev_priv->gt.qos.debug);
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(i915_sf_qos_debug_fops,
+			i915_sf_qos_debug_get,
+			i915_sf_qos_debug_set, "%llu\n");
+
 static int i915_runtime_pm_status(struct seq_file *m, void *unused)
 {
 	struct drm_i915_private *dev_priv = node_to_i915(m->private);
@@ -1716,7 +1738,8 @@ static const struct i915_debugfs_files {
 #endif
 	{"i915_sf_qos_delay_max_ns", &i915_sf_qos_delay_max_ns_fops},
 	{"i915_sf_qos_delay_slope_shift", &i915_sf_qos_delay_slope_shift_fops},
-	{"i915_sf_qos_target_hz", &i915_sf_qos_target_hz_fops}
+	{"i915_sf_qos_target_hz", &i915_sf_qos_target_hz_fops},
+	{"i915_sf_qos_debug", &i915_sf_qos_debug_fops},
 };
 
 void i915_debugfs_register(struct drm_i915_private *dev_priv)

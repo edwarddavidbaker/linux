@@ -149,6 +149,7 @@
 #include "intel_ring.h"
 #include "intel_workarounds.h"
 #include "shmem_utils.h"
+#include "intel_rps.h"
 
 #define RING_EXECLIST_QFULL		(1 << 0x2)
 #define RING_EXECLIST1_VALID		(1 << 0x3)
@@ -2451,6 +2452,16 @@ skip_submit:
 	}
 }
 
+static void trace_status(struct intel_engine_cs *engine)
+{
+        const u32 status = (atomic_read(&engine->execlists.overload) ? 2 : 0) |
+                (atomic_read(&engine->execlists.busy) ? 1 : 0);
+
+        trace_intel_gpu_status(intel_gpu_freq(&engine->gt->rps, engine->gt->rps.cur_freq),
+                               intel_rps_read_actual_frequency(&engine->gt->rps),
+                               status);
+}
+
 static void
 cancel_port_requests(struct intel_engine_execlists * const execlists)
 {
@@ -2468,9 +2479,11 @@ cancel_port_requests(struct intel_engine_execlists * const execlists)
 	smp_wmb(); /* complete the seqlock for execlists_active() */
 	WRITE_ONCE(execlists->active, execlists->inflight);
 
-	if (atomic_xchg(&execlists->overload, 0)) {
+	if (atomic_xchg(&execlists->busy, 0)) {
 		struct intel_engine_cs *engine =
 			container_of(execlists, typeof(*engine), execlists);
+                atomic_xchg(&execlists->overload, 0);
+		trace_status(engine);
 		intel_qos_overload_end(&engine->gt->qos);
 	}
 }
@@ -2664,13 +2677,29 @@ static void process_csb(struct intel_engine_cs *engine)
 
 			WRITE_ONCE(execlists->pending[0], NULL);
 
-			if (execlists->inflight[1]) {
-				if (!atomic_xchg(&execlists->overload, 1))
-					intel_qos_overload_begin(&engine->gt->qos);
-			} else {
-				if (atomic_xchg(&execlists->overload, 0))
-					intel_qos_overload_end(&engine->gt->qos);
-			}
+                        bool trace = false;
+                        if (!atomic_xchg(&execlists->busy, 1)) {
+                                if ((engine->gt->qos.debug & 1))
+                                        intel_qos_overload_begin(&engine->gt->qos);
+                                trace = true;
+                        }
+
+                        if (execlists->inflight[1]) {
+                                if (!atomic_xchg(&execlists->overload, 1)) {
+                                        if (!(engine->gt->qos.debug & 1))
+                                                intel_qos_overload_begin(&engine->gt->qos);
+                                        trace = true;
+                                }
+                        } else {
+                                if (atomic_xchg(&execlists->overload, 0)) {
+                                        if (!(engine->gt->qos.debug & 1))
+                                                intel_qos_overload_end(&engine->gt->qos);
+                                        trace = true;
+                                }
+                        }
+
+                        if (trace)
+                                trace_status(engine);
 		} else {
 			if (GEM_WARN_ON(!*execlists->active)) {
 				execlists->error_interrupt |= ERROR_CSB;
@@ -2680,8 +2709,12 @@ static void process_csb(struct intel_engine_cs *engine)
 			/* port0 completed, advanced to port1 */
 			trace_ports(execlists, "completed", execlists->active);
 
-			if (atomic_xchg(&execlists->overload, 0))
-				intel_qos_overload_end(&engine->gt->qos);
+                        bool trace = false;
+                        if (atomic_xchg(&execlists->overload, 0)) {
+                                if (!(engine->gt->qos.debug & 1))
+                                        intel_qos_overload_end(&engine->gt->qos);
+                                trace = true;
+                        }
 
 			/*
 			 * We rely on the hardware being strongly
@@ -2723,6 +2756,15 @@ static void process_csb(struct intel_engine_cs *engine)
 			}
 
 			execlists_schedule_out(*execlists->active++);
+
+                        if (!*execlists->active && atomic_xchg(&execlists->busy, 0)) {
+                                if ((engine->gt->qos.debug & 1))
+                                        intel_qos_overload_end(&engine->gt->qos);
+                                trace = true;
+                        }
+
+                        if (trace)
+                                trace_status(engine);
 
 			GEM_BUG_ON(execlists->active - execlists->inflight >
 				   execlists_num_ports(execlists));
