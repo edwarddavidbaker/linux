@@ -957,6 +957,26 @@ TRACE_EVENT(intel_gpu_freq_change,
 	    TP_printk("new_freq=%u", __entry->freq)
 );
 
+TRACE_EVENT(intel_gpu_status,
+	    TP_PROTO(u32 req_freq, u32 act_freq, u32 status),
+	    TP_ARGS(req_freq, act_freq, status),
+
+	    TP_STRUCT__entry(
+			     __field(u32, req_freq)
+			     __field(u32, act_freq)
+			     __field(u32, status)
+			     ),
+
+	    TP_fast_assign(
+			   __entry->req_freq = req_freq;
+			   __entry->act_freq = act_freq;
+			   __entry->status = status;
+			   ),
+
+	    TP_printk("req_freq=%u act_freq=%u status=%u",
+                      __entry->req_freq, __entry->act_freq, __entry->status)
+);
+
 /**
  * DOC: i915_ppgtt_create and i915_ppgtt_release tracepoints
  *

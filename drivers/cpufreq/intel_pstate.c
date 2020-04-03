@@ -2672,6 +2672,11 @@ static void intel_pstate_update_util(struct update_util_data *data, u64 time,
 static void intel_pstate_update_util_vlp(struct update_util_data *data,
 					 u64 time, unsigned int flags)
 {
+	if (vlp_params.debug & 16) {
+		intel_pstate_update_util(data, time, flags);
+		return;
+	}
+
 	struct cpudata *cpu = container_of(data, struct cpudata, update_util);
 
 	if (update_vlp_sample(cpu, time, flags)) {
@@ -2687,9 +2692,25 @@ static void intel_pstate_update_util_hwp_vlp(struct update_util_data *data,
 	struct cpudata *cpu = container_of(data, struct cpudata, update_util);
 
 	if (update_vlp_sample(cpu, time, flags)) {
-		const struct vlp_target_range *target =
-			get_vlp_target_range(cpu);
-		intel_pstate_adjust_pstate_range(cpu, target->value);
+                if (vlp_params.debug & 16) {
+                        struct sample *sample = &cpu->sample;
+
+                        trace_pstate_sample(mul_ext_fp(100, sample->core_avg_perf),
+                                            fp_toint(sample->busy_scaled),
+                                            READ_ONCE(cpu->hwp_req_cached),
+                                            READ_ONCE(cpu->hwp_req_cached),
+                                            sample->mperf,
+                                            sample->aperf,
+                                            sample->tsc,
+                                            get_avg_frequency(cpu),
+                                            fp_toint(cpu->iowait_boost * 100),
+                                            cpu->vlp.status.value);
+
+                } else {
+                        const struct vlp_target_range *target =
+                                get_vlp_target_range(cpu);
+                        intel_pstate_adjust_pstate_range(cpu, target->value);
+                }
 	}
 }
 

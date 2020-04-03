@@ -299,6 +299,7 @@ struct intel_engine_execlists {
 	 * benefit from the increased TDP budget.
 	 */
 	atomic_t overload;
+	atomic_t busy;
 
 	I915_SELFTEST_DECLARE(struct st_preempt_hang preempt_hang;)
 };

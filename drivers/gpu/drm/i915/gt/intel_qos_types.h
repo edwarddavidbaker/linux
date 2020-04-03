@@ -33,6 +33,7 @@ struct intel_qos {
 	 * indicate that the workload is latency-bound.
 	 */
 	u32 delay_slope_shift;
+	u32 debug;
 
 	/**
 	 * Last time intel_gt_pm_active_begin() was called to
