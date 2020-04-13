@@ -87,7 +87,9 @@ static void rps_enable_interrupts(struct intel_rps *rps)
 	gen6_gt_pm_enable_irq(gt, rps->pm_events);
 	spin_unlock_irq(&gt->irq_lock);
 
-	set(gt->uncore, GEN6_PMINTRMSK, rps_pm_mask(rps, rps->cur_freq));
+	if (INTEL_GEN(rps_to_i915(rps)) < 11)
+		set(gt->uncore, GEN6_PMINTRMSK,
+		    rps_pm_mask(rps, rps->cur_freq));
 }
 
 static void gen6_rps_reset_interrupts(struct intel_rps *rps)
@@ -120,7 +122,9 @@ static void rps_disable_interrupts(struct intel_rps *rps)
 	struct intel_gt *gt = rps_to_gt(rps);
 
 	WRITE_ONCE(rps->pm_events, 0);
-	set(gt->uncore, GEN6_PMINTRMSK, rps_pm_sanitize_mask(rps, ~0u));
+
+	if (INTEL_GEN(rps_to_i915(rps)) < 11)
+		set(gt->uncore, GEN6_PMINTRMSK, rps_pm_sanitize_mask(rps, ~0u));
 
 	spin_lock_irq(&gt->irq_lock);
 	gen6_gt_pm_disable_irq(gt, GEN6_PM_RPS_EVENTS);
@@ -829,7 +833,9 @@ int intel_rps_set(struct intel_rps *rps, u8 val)
 			set(uncore,
 			    GEN6_RP_INTERRUPT_LIMITS, rps_limits(rps, val));
 
-			set(uncore, GEN6_PMINTRMSK, rps_pm_mask(rps, val));
+			if (INTEL_GEN(rps_to_i915(rps)) < 11)
+				set(uncore, GEN6_PMINTRMSK,
+				    rps_pm_mask(rps, val));
 		}
 	}
 
@@ -921,6 +927,14 @@ static bool gen9_rps_enable(struct intel_rps *rps)
 			      GT_INTERVAL_FROM_US(i915, 1000000));
 
 	intel_uncore_write_fw(uncore, GEN6_RP_IDLE_HYSTERSIS, 0xa);
+
+	if (INTEL_GEN(i915) >= 11) {
+		const u32 mask = (GEN6_PM_RP_UP_EI_EXPIRED |
+				  GEN6_PM_RP_UP_THRESHOLD |
+				  GEN6_PM_RP_DOWN_THRESHOLD |
+				  GEN6_PM_RP_DOWN_TIMEOUT);
+		intel_uncore_write_fw(uncore, GEN6_PMINTRMSK, ~mask);
+	}
 
 	return rps_reset(rps);
 }
