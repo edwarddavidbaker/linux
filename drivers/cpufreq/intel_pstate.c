@@ -3682,6 +3682,10 @@ static const struct x86_cpu_id hwp_support_ids[] __initconst = {
 					   X86_FEATURE_APERFMPERF, 0)
 
 static const struct x86_cpu_id vlp_default_ids[] __initconst = {
+	X86_MATCH_VLP(ATOM_SILVERMONT),
+	X86_MATCH_VLP(ATOM_AIRMONT),
+	X86_MATCH_VLP(ATOM_GOLDMONT),
+	X86_MATCH_VLP(ATOM_GOLDMONT_PLUS),
 	X86_MATCH_VLP(ICELAKE),
 	X86_MATCH_VLP(ICELAKE_L),
 	{}
