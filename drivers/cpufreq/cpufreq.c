@@ -648,6 +648,9 @@ static unsigned int cpufreq_parse_policy(char *str_governor)
 	if (!strncasecmp(str_governor, "powersave", CPUFREQ_NAME_LEN))
 		return CPUFREQ_POLICY_POWERSAVE;
 
+	if (!strncasecmp(str_governor, "adaptive", CPUFREQ_NAME_LEN))
+		return CPUFREQ_POLICY_ADAPTIVE;
+
 	return CPUFREQ_POLICY_UNKNOWN;
 }
 
@@ -754,6 +757,8 @@ static ssize_t show_scaling_governor(struct cpufreq_policy *policy, char *buf)
 		return sprintf(buf, "powersave\n");
 	else if (policy->policy == CPUFREQ_POLICY_PERFORMANCE)
 		return sprintf(buf, "performance\n");
+	else if (policy->policy == CPUFREQ_POLICY_ADAPTIVE)
+		return sprintf(buf, "adaptive\n");
 	else if (policy->governor)
 		return scnprintf(buf, CPUFREQ_NAME_PLEN, "%s\n",
 				policy->governor->name);
@@ -815,7 +820,7 @@ static ssize_t show_scaling_available_governors(struct cpufreq_policy *policy,
 	struct cpufreq_governor *t;
 
 	if (!has_target()) {
-		i += sprintf(buf, "performance powersave");
+		i += sprintf(buf, "performance powersave adaptive");
 		goto out;
 	}
 
@@ -1091,7 +1096,8 @@ static int cpufreq_init_policy(struct cpufreq_policy *policy)
 				pol = policy->policy;
 		}
 		if (pol != CPUFREQ_POLICY_PERFORMANCE &&
-		    pol != CPUFREQ_POLICY_POWERSAVE)
+		    pol != CPUFREQ_POLICY_POWERSAVE &&
+		    pol != CPUFREQ_POLICY_ADAPTIVE)
 			return -ENODATA;
 	}
 
