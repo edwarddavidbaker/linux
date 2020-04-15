@@ -2523,6 +2523,18 @@ static void intel_pstate_update_util(struct update_util_data *data, u64 time,
  * Implementation of the cpufreq update_util hook based on the VLP
  * controller (see get_vlp_target_range()).
  */
+static void intel_pstate_update_util_vlp(struct update_util_data *data,
+					 u64 time, unsigned int flags)
+{
+	struct cpudata *cpu = container_of(data, struct cpudata, update_util);
+
+	if (update_vlp_sample(cpu, time, flags)) {
+		const int32_t target = get_vlp_target_pstate(cpu);
+
+		intel_pstate_adjust_pstate(cpu, target);
+	}
+}
+
 static void intel_pstate_update_util_hwp_vlp(struct update_util_data *data,
 					     u64 time, unsigned int flags)
 {
@@ -2696,7 +2708,7 @@ static void intel_pstate_set_update_util_hook(unsigned int cpu_num)
 		cpufreq_add_update_util_hook(cpu_num, &cpu->update_util,
 					     (hwp_active ?
 					      intel_pstate_update_util_hwp_vlp :
-					      intel_pstate_update_util));
+					      intel_pstate_update_util_vlp));
 	} else {
 		cpufreq_add_update_util_hook(cpu_num, &cpu->update_util,
 					     (hwp_active ?
@@ -3462,7 +3474,7 @@ static int __init intel_pstate_init(void)
 hwp_cpu_matched:
 	/* Enable VLP controller by default. */
 	vlp = !intel_pstate_acpi_pm_profile_server() &&
-	      x86_match_cpu(vlp_default_ids) && hwp_active;
+	      x86_match_cpu(vlp_default_ids);
 
 	/*
 	 * The Intel pstate driver will be ignored if the platform
