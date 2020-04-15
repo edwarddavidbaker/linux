@@ -2016,10 +2016,11 @@ static void intel_pstate_set_update_util_hook(unsigned int cpu_num)
 {
 	struct cpudata *cpu = all_cpu_data[cpu_num];
 
-	if (hwp_active && !hwp_boost)
-		return;
-
 	if (cpu->update_util_set)
+		intel_pstate_clear_update_util_hook(cpu_num);
+
+	if (cpu->policy == CPUFREQ_POLICY_PERFORMANCE ||
+	    (hwp_active && !hwp_boost))
 		return;
 
 	/* Prevent intel_pstate_update_util() from using stale data. */
@@ -2117,27 +2118,18 @@ static int intel_pstate_set_policy(struct cpufreq_policy *policy)
 
 	intel_pstate_update_perf_limits(cpu, policy->min, policy->max);
 
+	intel_pstate_set_update_util_hook(policy->cpu);
+
 	if (cpu->policy == CPUFREQ_POLICY_PERFORMANCE) {
 		/*
 		 * NOHZ_FULL CPUs need this as the governor callback may not
 		 * be invoked on them.
 		 */
-		intel_pstate_clear_update_util_hook(policy->cpu);
 		intel_pstate_max_within_limits(cpu);
-	} else {
-		intel_pstate_set_update_util_hook(policy->cpu);
 	}
 
-	if (hwp_active) {
-		/*
-		 * When hwp_boost was active before and dynamically it
-		 * was turned off, in that case we need to clear the
-		 * update util hook.
-		 */
-		if (!hwp_boost)
-			intel_pstate_clear_update_util_hook(policy->cpu);
+	if (hwp_active)
 		intel_pstate_hwp_set(policy->cpu);
-	}
 
 	mutex_unlock(&intel_pstate_limits_lock);
 
