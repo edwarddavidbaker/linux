@@ -1913,6 +1913,20 @@ static void intel_pstate_reset_vlp(struct cpudata *cpu)
 	vlp->gain = max(1, div_fp(1000, vlp_params.setpoint_0_pml));
 	vlp->target.p_base = 0;
 	vlp->stats.last_scaling_response_hz = vlp_params.avg_hz;
+
+	if (hwp_active) {
+		const uint32_t p0 = max(cpu->pstate.min_pstate,
+					cpu->min_perf_ratio);
+		const uint32_t p1 = max_t(uint32_t, p0, cpu->max_perf_ratio);
+		const uint64_t hwp_req = (READ_ONCE(cpu->hwp_req_cached) &
+					  ~(HWP_MAX_PERF(~0L) |
+					    HWP_MIN_PERF(~0L) |
+					    HWP_DESIRED_PERF(~0L))) |
+					 HWP_MIN_PERF(p0) | HWP_MAX_PERF(p1);
+
+		wrmsrl_on_cpu(cpu->cpu, MSR_HWP_REQUEST, hwp_req);
+		WRITE_ONCE(cpu->hwp_req_cached, hwp_req);
+	}
 }
 
 /**
@@ -2230,6 +2244,46 @@ static void intel_pstate_adjust_pstate(struct cpudata *cpu)
 		fp_toint(cpu->iowait_boost * 100));
 }
 
+static void intel_pstate_adjust_pstate_range(struct cpudata *cpu,
+					     const unsigned int range[])
+{
+	const uint64_t hwp_req_cached = READ_ONCE(cpu->hwp_req_cached);
+	unsigned int p0, p1, p_min, p_max;
+	struct sample *sample;
+	uint64_t hwp_req;
+
+	update_turbo_state();
+
+	p0 = max(cpu->pstate.min_pstate, cpu->min_perf_ratio);
+	p1 = max_t(unsigned int, p0, cpu->max_perf_ratio);
+	p_min = clamp_t(unsigned int, range[0], p0, p1);
+	p_max = clamp_t(unsigned int, range[1], p0, p1);
+
+	trace_cpu_frequency(p_max * cpu->pstate.scaling, cpu->cpu);
+
+	hwp_req = (hwp_req_cached &
+		   ~(HWP_MAX_PERF(~0L) | HWP_MIN_PERF(~0L) |
+		     HWP_DESIRED_PERF(~0L))) |
+		  HWP_MIN_PERF(vlp_params.debug & 2 ? p0 : p_min) |
+		  HWP_MAX_PERF(vlp_params.debug & 4 ? p1 : p_max);
+
+	if (hwp_req != hwp_req_cached) {
+		wrmsrl(MSR_HWP_REQUEST, hwp_req);
+		WRITE_ONCE(cpu->hwp_req_cached, hwp_req);
+	}
+
+	sample = &cpu->sample;
+	trace_pstate_sample(mul_ext_fp(100, sample->core_avg_perf),
+			    fp_toint(sample->busy_scaled),
+			    hwp_req_cached,
+			    hwp_req,
+			    sample->mperf,
+			    sample->aperf,
+			    sample->tsc,
+			    get_avg_frequency(cpu),
+			    fp_toint(cpu->iowait_boost * 100));
+}
+
 static void intel_pstate_update_util(struct update_util_data *data, u64 time,
 				     unsigned int flags)
 {
@@ -2266,6 +2320,22 @@ static void intel_pstate_update_util(struct update_util_data *data, u64 time,
 
 	if (intel_pstate_sample(cpu, time))
 		intel_pstate_adjust_pstate(cpu);
+}
+
+/**
+ * Implementation of the cpufreq update_util hook based on the VLP
+ * controller (see get_vlp_target_range()).
+ */
+static void intel_pstate_update_util_hwp_vlp(struct update_util_data *data,
+					     u64 time, unsigned int flags)
+{
+	struct cpudata *cpu = container_of(data, struct cpudata, update_util);
+
+	if (update_vlp_sample(cpu, time, flags)) {
+		const struct vlp_target_range *target =
+			get_vlp_target_range(cpu);
+		intel_pstate_adjust_pstate_range(cpu, target->value);
+	}
 }
 
 static struct pstate_funcs core_funcs = {
@@ -2418,15 +2488,25 @@ static void intel_pstate_set_update_util_hook(unsigned int cpu_num)
 		intel_pstate_clear_update_util_hook(cpu_num);
 
 	if (cpu->policy == CPUFREQ_POLICY_PERFORMANCE ||
-	    (hwp_active && !hwp_boost))
+	    (cpu->policy != CPUFREQ_POLICY_ADAPTIVE &&
+	     hwp_active && !hwp_boost))
 		return;
 
 	/* Prevent intel_pstate_update_util() from using stale data. */
 	cpu->sample.time = 0;
-	cpufreq_add_update_util_hook(cpu_num, &cpu->update_util,
-				     (hwp_active ?
-				      intel_pstate_update_util_hwp :
-				      intel_pstate_update_util));
+
+	if (cpu->policy == CPUFREQ_POLICY_ADAPTIVE) {
+		cpufreq_add_update_util_hook(cpu_num, &cpu->update_util,
+					     (hwp_active ?
+					      intel_pstate_update_util_hwp_vlp :
+					      intel_pstate_update_util));
+	} else {
+		cpufreq_add_update_util_hook(cpu_num, &cpu->update_util,
+					     (hwp_active ?
+					      intel_pstate_update_util_hwp :
+					      intel_pstate_update_util));
+	}
+
 	cpu->update_util_set = true;
 }
 
@@ -2528,6 +2608,8 @@ static int intel_pstate_set_policy(struct cpufreq_policy *policy)
 
 	if (hwp_active)
 		intel_pstate_hwp_set(policy->cpu);
+
+	intel_pstate_reset_vlp(cpu);
 
 	mutex_unlock(&intel_pstate_limits_lock);
 
