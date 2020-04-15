@@ -396,6 +396,7 @@ static int hwp_active __read_mostly;
 static int hwp_mode_bdw __read_mostly;
 static bool per_cpu_limits __read_mostly;
 static bool hwp_boost __read_mostly;
+static bool vlp __read_mostly;
 
 static struct cpufreq_driver *intel_pstate_driver __read_mostly;
 
@@ -2724,7 +2725,8 @@ static int intel_pstate_cpu_init(struct cpufreq_policy *policy)
 	 * Set the policy to powersave to provide a valid fallback value in case
 	 * the default cpufreq governor is neither powersave nor performance.
 	 */
-	policy->policy = CPUFREQ_POLICY_POWERSAVE;
+	policy->policy = (vlp ? CPUFREQ_POLICY_ADAPTIVE :
+			  CPUFREQ_POLICY_POWERSAVE);
 
 	return 0;
 }
@@ -3209,6 +3211,16 @@ static const struct x86_cpu_id hwp_support_ids[] __initconst = {
 	{}
 };
 
+#define X86_MATCH_VLP(model)                                            \
+	X86_MATCH_VENDOR_FAM_MODEL_FEATURE(INTEL, 6, INTEL_FAM6_##model, \
+					   X86_FEATURE_APERFMPERF, 0)
+
+static const struct x86_cpu_id vlp_default_ids[] __initconst = {
+	X86_MATCH_VLP(ICELAKE),
+	X86_MATCH_VLP(ICELAKE_L),
+	{}
+};
+
 static int __init intel_pstate_init(void)
 {
 	const struct x86_cpu_id *id;
@@ -3247,6 +3259,10 @@ static int __init intel_pstate_init(void)
 	default_driver = &intel_cpufreq;
 
 hwp_cpu_matched:
+	/* Enable VLP controller by default. */
+	vlp = !intel_pstate_acpi_pm_profile_server() &&
+	      x86_match_cpu(vlp_default_ids) && hwp_active;
+
 	/*
 	 * The Intel pstate driver will be ignored if the platform
 	 * firmware has its own power management modes.
