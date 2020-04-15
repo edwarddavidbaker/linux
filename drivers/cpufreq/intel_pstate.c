@@ -2000,6 +2000,18 @@ static int intel_pstate_init_cpu(unsigned int cpunum)
 	return 0;
 }
 
+static void intel_pstate_clear_update_util_hook(unsigned int cpu)
+{
+	struct cpudata *cpu_data = all_cpu_data[cpu];
+
+	if (!cpu_data->update_util_set)
+		return;
+
+	cpufreq_remove_update_util_hook(cpu);
+	cpu_data->update_util_set = false;
+	synchronize_rcu();
+}
+
 static void intel_pstate_set_update_util_hook(unsigned int cpu_num)
 {
 	struct cpudata *cpu = all_cpu_data[cpu_num];
@@ -2017,18 +2029,6 @@ static void intel_pstate_set_update_util_hook(unsigned int cpu_num)
 				      intel_pstate_update_util_hwp :
 				      intel_pstate_update_util));
 	cpu->update_util_set = true;
-}
-
-static void intel_pstate_clear_update_util_hook(unsigned int cpu)
-{
-	struct cpudata *cpu_data = all_cpu_data[cpu];
-
-	if (!cpu_data->update_util_set)
-		return;
-
-	cpufreq_remove_update_util_hook(cpu);
-	cpu_data->update_util_set = false;
-	synchronize_rcu();
 }
 
 static int intel_pstate_get_max_freq(struct cpudata *cpu)
