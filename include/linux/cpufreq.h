@@ -536,6 +536,7 @@ static inline unsigned long cpufreq_scale(unsigned long old, u_int div,
  */
 #define CPUFREQ_POLICY_POWERSAVE	(1)
 #define CPUFREQ_POLICY_PERFORMANCE	(2)
+#define CPUFREQ_POLICY_ADAPTIVE 	(3)
 
 /*
  * The polling frequency depends on the capability of the processor. Default

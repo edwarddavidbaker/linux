@@ -99,6 +99,7 @@ static int longrun_set_policy(struct cpufreq_policy *policy)
 		msr_lo |= 0x00000001;
 		break;
 	case CPUFREQ_POLICY_POWERSAVE:
+	case CPUFREQ_POLICY_ADAPTIVE:
 		break;
 	}
 	wrmsr(MSR_TMTA_LONGRUN_FLAGS, msr_lo, msr_hi);
