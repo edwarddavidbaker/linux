@@ -194,10 +194,13 @@ struct vlp_input_stats {
 
 enum vlp_status {
 	VLP_BOTTLENECK_IO = 1 << 0,
-	/*
-	 * XXX - Add other status bits here indicating a CPU or TDP
-	 * bottleneck.
-	 */
+	VLP_BOTTLENECK_CPU = 1 << 1
+};
+
+struct vlp_status_state_sample {
+	int32_t p_value;
+	int32_t po_avg_st_pml;
+	int32_t occ_avg_st_pml;
 };
 
 /**
@@ -208,6 +211,7 @@ enum vlp_status {
 struct vlp_status_sample {
 	enum vlp_status value;
 	int32_t realtime_avg;
+	struct vlp_status_state_sample last_state[2];
 };
 
 /**
@@ -233,7 +237,7 @@ struct vlp_data {
 	int32_t sample_frequency_hz;
 	int32_t gain_aggr;
 	int32_t gain_rt;
-	int32_t gain;
+	int32_t gain_st[2];
 
 	struct vlp_input_stats stats;
 	struct vlp_status_sample status;
@@ -352,9 +356,12 @@ static struct cpudata **all_cpu_data;
 struct vlp_params {
 	int sample_interval_ms;
 	int setpoint_0_pml;
+	int setpoint_1_pml;
 	int setpoint_aggr_pml;
 	int avg_hz;
+	int avg_2_hz;
 	int realtime_gain_pml;
+	int state_occ_threshold_pml;
 	int debug;
 };
 
@@ -386,9 +393,12 @@ static struct pstate_funcs pstate_funcs __read_mostly;
 static struct vlp_params vlp_params __read_mostly = {
 	.sample_interval_ms = 10,
 	.setpoint_0_pml = 900,
+	.setpoint_1_pml = 50,
 	.setpoint_aggr_pml = 1500,
 	.avg_hz = 2,
+	.avg_2_hz = 10,
 	.realtime_gain_pml = 0,
+	.state_occ_threshold_pml = 25,
 	.debug = 0,
 };
 
@@ -1068,9 +1078,12 @@ struct vlp_param {
 static struct vlp_param vlp_files[] = {
 	{"vlp_sample_interval_ms", &vlp_params.sample_interval_ms, },
 	{"vlp_setpoint_0_pml", &vlp_params.setpoint_0_pml, },
+	{"vlp_setpoint_1_pml", &vlp_params.setpoint_1_pml, },
 	{"vlp_setpoint_aggr_pml", &vlp_params.setpoint_aggr_pml, },
 	{"vlp_avg_hz", &vlp_params.avg_hz, },
+	{"vlp_avg_2_hz", &vlp_params.avg_2_hz, },
 	{"vlp_realtime_gain_pml", &vlp_params.realtime_gain_pml, },
+	{"vlp_state_occ_threshold_pml", &vlp_params.state_occ_threshold_pml, },
 	{"vlp_debug", &vlp_params.debug, },
 	{NULL, NULL, }
 };
@@ -1993,7 +2006,8 @@ static void intel_pstate_reset_vlp(struct cpudata *cpu)
 	vlp->gain_rt = div_fp(cpu->pstate.max_pstate *
 			      vlp_params.realtime_gain_pml, 1000);
 	vlp->gain_aggr = max(1, div_fp(1000, vlp_params.setpoint_aggr_pml));
-	vlp->gain = max(1, div_fp(1000, vlp_params.setpoint_0_pml));
+	vlp->gain_st[0] = max(1, div_fp(1000, vlp_params.setpoint_0_pml));
+	vlp->gain_st[1] = max(1, div_fp(1000, vlp_params.setpoint_1_pml));
 	vlp->target.p_base = 0;
 	vlp->stats.last_scaling_response_hz = vlp_params.avg_hz;
 
@@ -2066,6 +2080,45 @@ static int32_t get_last_sample_avg_weight(struct cpudata *cpu, unsigned int hz)
 			 (hz * delta_ns) >> (ns_per_s_shift - DFRAC_BITS)));
 }
 
+static const struct vlp_status_state_sample *get_vlp_status_state_sample(
+	struct cpudata *cpu, unsigned int s, const int32_t po)
+{
+	struct vlp_status_sample *last_status = &cpu->vlp.status;
+	struct vlp_status_state_sample *last_state =
+		&last_status->last_state[s];
+	const unsigned int last_s = !!(last_status->value & VLP_BOTTLENECK_CPU);
+
+	/*
+	 * Calculate the denormalized performance of the specified
+	 * state during the averaging period.
+	 */
+	const int32_t alpha_2 =
+		get_last_sample_avg_weight(cpu, vlp_params.avg_2_hz);
+
+	const int32_t po_st_pml = last_s == s ? 1000 * po : 0;
+	const int32_t po_avg_st_pml = po_st_pml +
+		mul_fp(alpha_2, last_state->po_avg_st_pml - po_st_pml);
+
+	/*
+	 * Calculate the occupancy fraction of the specified state
+	 * during the averaging period.
+	 */
+	const int32_t occ_st_pml = last_s == s ? int_tofp(1000) : 0;
+	const int32_t occ_avg_st_pml = occ_st_pml +
+		mul_fp(alpha_2, last_state->occ_avg_st_pml - occ_st_pml);
+
+	/*
+	 * Return state updated with an estimate of the average
+	 * performance of the specified state during the fraction of
+	 * the averaging period that it was active.
+	 */
+	last_state->po_avg_st_pml = po_avg_st_pml;
+	last_state->occ_avg_st_pml = occ_avg_st_pml;
+	last_state->p_value = div_fp(po_avg_st_pml, max(1, occ_avg_st_pml));
+
+	return last_state;
+}
+
 /**
  * Calculate some status information heuristically based on the struct
  * vlp_input_stats statistics gathered by the update_state() hook.
@@ -2113,6 +2166,21 @@ static const struct vlp_status_sample *get_vlp_status_sample(
 	const int32_t realtime_avg = realtime_sample +
 		mul_fp(alpha, last_status->realtime_avg - realtime_sample);
 
+	/*
+	 * Calculate the target state of the state machine by
+	 * selecting the state with greater observed performance.
+	 */
+	const struct vlp_status_state_sample *state[] = {
+		get_vlp_status_state_sample(cpu, 0, po),
+		get_vlp_status_state_sample(cpu, 1, po)
+	};
+	const int32_t occ_threshold_pml =
+		int_tofp(vlp_params.state_occ_threshold_pml);
+	const unsigned int s = !bottleneck_io ? 1 :
+		state[1]->occ_avg_st_pml < occ_threshold_pml ? 1 :
+		state[0]->occ_avg_st_pml < occ_threshold_pml ? 0 :
+		!!(state[1]->p_value >= state[0]->p_value);
+
 	/* Consume the input statistics. */
 	stats->io_wait_count = 0;
 	stats->realtime_count = 0;
@@ -2123,13 +2191,48 @@ static const struct vlp_status_sample *get_vlp_status_sample(
 
 	/* Update the state of the controller. */
 	last_status->realtime_avg = realtime_avg;
-	last_status->value = (bottleneck_io ? VLP_BOTTLENECK_IO : 0);
+	last_status->value = (bottleneck_io ? VLP_BOTTLENECK_IO : 0) |
+			     (s ? VLP_BOTTLENECK_CPU : 0);
 
 	/* Update state used for tracing. */
 	cpu->sample.busy_scaled = int_tofp(stats->max_scaling_response_hz);
 	cpu->iowait_boost = realtime_avg;
 
 	return last_status;
+}
+
+static int32_t get_vlp_target_for_state(struct cpudata *cpu, unsigned int s,
+					int32_t po_cons, int32_t po_aggr)
+{
+	struct vlp_data *vlp = &cpu->vlp;
+
+	/*
+	 * P-state limits in fixed-point as allowed by the policy.
+	 */
+	const int32_t p0 = int_tofp(max(cpu->pstate.min_pstate,
+					cpu->min_perf_ratio));
+	const int32_t p1 = int_tofp(cpu->max_perf_ratio);
+
+	/*
+	 * Calculate target P-state from the conservative performance
+	 * estimate, correcting for overutilization.
+	 */
+	const int32_t p_tgt_cons_st = mul_fp(vlp->gain_st[s], po_cons);
+	const int32_t p_tgt_aggr_st = mul_fp(vlp->gain_st[s], po_aggr);
+	const int32_t p_tgt_over_st = p_tgt_cons_st <= po_aggr ||
+				      !(vlp_params.debug & 1) ? 0 :
+		po_aggr + mul_fp(p1 - po_aggr,
+				 div_fp(p_tgt_cons_st - po_aggr,
+					max(1, p_tgt_aggr_st - po_aggr)));
+
+	/*
+	 * Calculate target P-state from the aggressive performance
+	 * estimate.
+	 */
+	const int32_t p_tgt_aggr = mul_fp(vlp->gain_aggr, po_aggr);
+
+	return max(p0, min(p1,
+			   max(max(p_tgt_cons_st, p_tgt_over_st), p_tgt_aggr)));
 }
 
 /**
@@ -2142,13 +2245,6 @@ static const struct vlp_target_range *get_vlp_target_range(struct cpudata *cpu)
 {
 	struct vlp_data *vlp = &cpu->vlp;
 	struct vlp_target_range *last_target = &vlp->target;
-
-	/*
-	 * P-state limits in fixed-point as allowed by the policy.
-	 */
-	const int32_t p0 = int_tofp(max(cpu->pstate.min_pstate,
-					cpu->min_perf_ratio));
-	const int32_t p1 = int_tofp(cpu->max_perf_ratio);
 
 	/*
 	 * Observed average P-state during the sampling period.	 The
@@ -2181,12 +2277,16 @@ static const struct vlp_target_range *get_vlp_target_range(struct cpudata *cpu)
 	const struct vlp_status_sample *status =
 		get_vlp_status_sample(cpu, po_cons);
 
-	/* Calculate the target P-state. */
-	const int32_t p_tgt_cons = mul_fp(vlp->gain, po_cons);
-	const int32_t p_tgt_aggr = mul_fp(vlp->gain_aggr, po_aggr);
-	const int32_t p_tgt = max(p0, min(p1, max(p_tgt_cons, p_tgt_aggr)));
+	/* Calculate the target P-state range. */
+	const int32_t p_tgt_st[] = {
+		get_vlp_target_for_state(cpu, 0, po_cons, po_aggr),
+		get_vlp_target_for_state(cpu, 1, po_cons, po_aggr)
+	};
 
 	/* Calculate the realtime P-state target lower bound. */
+	const int32_t p0 = int_tofp(max(cpu->pstate.min_pstate,
+					cpu->min_perf_ratio));
+	const int32_t p1 = int_tofp(cpu->max_perf_ratio);
 	const int32_t pm = int_tofp(cpu->pstate.max_pstate);
 	const int32_t p_tgt_rt = min(pm, mul_fp(vlp->gain_rt,
 						status->realtime_avg));
@@ -2238,8 +2338,8 @@ static const struct vlp_target_range *get_vlp_target_range(struct cpudata *cpu)
 	const int32_t alpha = get_last_sample_avg_weight(
 		cpu, vlp->stats.last_scaling_response_hz);
 
-	last_target->p_base = p_tgt + mul_fp(alpha,
-					     last_target->p_base - p_tgt);
+	last_target->p_base = p_tgt_st[0] +
+		mul_fp(alpha, last_target->p_base - p_tgt_st[0]);
 
 	/*
 	 * Use the low-pass-filtered controller response for better
@@ -2250,12 +2350,22 @@ static const struct vlp_target_range *get_vlp_target_range(struct cpudata *cpu)
 	if ((status->value & VLP_BOTTLENECK_IO)) {
 		last_target->value[0] = rnd_fp(p0);
 		last_target->value[1] = rnd_fp(last_target->p_base);
+	} else if ((vlp_params.debug & 8)) {
+		last_target->value[0] = rnd_fp(max(p_tgt_rt, p_tgt_st[0]));
+		last_target->value[1] = rnd_fp(max(p_tgt_rt, p_tgt_st[1]));
 	} else {
 		last_target->value[0] = rnd_fp(p_tgt_rt);
 		last_target->value[1] = rnd_fp(p1);
 	}
 
 	return last_target;
+}
+
+static int32_t get_vlp_target_pstate(struct cpudata *cpu)
+{
+	const struct vlp_target_range *target = get_vlp_target_range(cpu);
+
+	return target->value[!!(cpu->vlp.status.value & VLP_BOTTLENECK_CPU)];
 }
 
 /**
