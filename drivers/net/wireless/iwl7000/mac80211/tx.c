@@ -174,6 +174,9 @@ static __le16 ieee80211_duration(struct ieee80211_tx_data *tx,
 		case NUM_NL80211_BANDS:
 			WARN_ON(1);
 			break;
+		default:
+			WARN_ON(1);
+			break;
 		}
 	}
 	if (rate == -1) {

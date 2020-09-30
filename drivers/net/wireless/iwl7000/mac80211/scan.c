@@ -949,6 +949,9 @@ static void ieee80211_scan_state_set_channel(struct ieee80211_local *local,
 		else
 			local->scan_chandef.width = NL80211_CHAN_WIDTH_20_NOHT;
 		break;
+	default:
+		WARN_ON(1);
+		break;
 	}
 
 	if (ieee80211_hw_config(local, IEEE80211_CONF_CHANGE_CHANNEL))
