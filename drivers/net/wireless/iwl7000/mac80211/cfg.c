@@ -3671,7 +3671,7 @@ static int ieee80211_probe_client(struct wiphy *wiphy, struct net_device *dev,
 	}
 
 	local_bh_disable();
-	ieee80211_xmit(sdata, sta, skb, 0);
+	ieee80211_xmit(sdata, sta, skb);
 	local_bh_enable();
 
 	ret = 0;
@@ -4213,7 +4213,7 @@ const struct cfg80211_ops mac80211_config_ops = {
 	.set_cqm_rssi_range_config = ieee80211_set_cqm_rssi_range_config,
 #endif
 #if CFG80211_VERSION >= KERNEL_VERSION(5,8,0)
-	.update_mgmt_frame_registrations = NULL,
+	.update_mgmt_frame_registrations = ieee80211_update_mgmt_frame_registrations,
 #else
 	.mgmt_frame_register = ieee80211_mgmt_frame_register,
 #endif

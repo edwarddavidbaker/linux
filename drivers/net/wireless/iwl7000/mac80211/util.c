@@ -10,7 +10,6 @@
  *
  * utilities for mac80211
  */
-
 #include <net/mac80211.h>
 #include <linux/netdevice.h>
 #include <linux/export.h>

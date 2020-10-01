@@ -1803,7 +1803,8 @@ netdev_tx_t ieee80211_subif_start_xmit_8023(struct sk_buff *skb,
 void __ieee80211_subif_start_xmit(struct sk_buff *skb,
 				  struct net_device *dev,
 				  u32 info_flags,
-				  u32 ctrl_flags);
+				  u32 ctrl_flags,
+				  u64 *cookie);
 void ieee80211_purge_tx_queue(struct ieee80211_hw *hw,
 			      struct sk_buff_head *skbs);
 struct sk_buff *
@@ -1819,8 +1820,9 @@ void ieee80211_check_fast_xmit_all(struct ieee80211_local *local);
 void ieee80211_check_fast_xmit_iface(struct ieee80211_sub_if_data *sdata);
 void ieee80211_clear_fast_xmit(struct sta_info *sta);
 int ieee80211_tx_control_port(struct wiphy *wiphy, struct net_device *dev,
-			      const u8 *buf, size_t len,
-			      const u8 *dest, __be16 proto, bool unencrypted);
+                              const u8 *buf, size_t len,
+                              const u8 *dest, __be16 proto, bool unencrypted,
+                              u64 *cookie);
 int ieee80211_probe_mesh_link(struct wiphy *wiphy, struct net_device *dev,
 			      const u8 *buf, size_t len);
 
@@ -1982,12 +1984,11 @@ void ieee80211_regulatory_limit_wmm_params(struct ieee80211_sub_if_data *sdata,
 void ieee80211_set_wmm_default(struct ieee80211_sub_if_data *sdata,
 			       bool bss_notify, bool enable_qos);
 void ieee80211_xmit(struct ieee80211_sub_if_data *sdata,
-		    struct sta_info *sta, struct sk_buff *skb,
-		    u32 txdata_flags);
+		    struct sta_info *sta, struct sk_buff *skb);
 
 void __ieee80211_tx_skb_tid_band(struct ieee80211_sub_if_data *sdata,
 				 struct sk_buff *skb, int tid,
-				 enum nl80211_band band, u32 txdata_flags);
+				 enum nl80211_band band);
 
 /* sta_out needs to be checked for ERR_PTR() before using */
 int ieee80211_lookup_ra_sta(struct ieee80211_sub_if_data *sdata,
@@ -2000,7 +2001,7 @@ ieee80211_tx_skb_tid_band(struct ieee80211_sub_if_data *sdata,
 			  enum nl80211_band band, u32 txdata_flags)
 {
 	rcu_read_lock();
-	__ieee80211_tx_skb_tid_band(sdata, skb, tid, band, txdata_flags);
+	__ieee80211_tx_skb_tid_band(sdata, skb, tid, band);
 	rcu_read_unlock();
 }
 
@@ -2018,7 +2019,7 @@ static inline void ieee80211_tx_skb_tid(struct ieee80211_sub_if_data *sdata,
 	}
 
 	__ieee80211_tx_skb_tid_band(sdata, skb, tid,
-				    chanctx_conf->def.chan->band, 0);
+				    chanctx_conf->def.chan->band);
 	rcu_read_unlock();
 }
 
