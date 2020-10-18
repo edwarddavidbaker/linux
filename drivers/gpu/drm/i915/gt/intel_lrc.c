@@ -2626,6 +2626,7 @@ static void process_csb(struct intel_engine_cs *engine)
 	rmb();
 	do {
 		bool promote;
+		bool trace;
 
 		if (++head == num_entries)
 			head = 0;
@@ -2684,7 +2685,7 @@ static void process_csb(struct intel_engine_cs *engine)
 
 			WRITE_ONCE(execlists->pending[0], NULL);
 
-                        bool trace = false;
+                        trace = false;
                         if (!atomic_xchg(&execlists->busy, 1)) {
                                 if ((engine->gt->qos.debug & 1))
                                         intel_qos_overload_begin(&engine->gt->qos);
@@ -2716,7 +2717,7 @@ static void process_csb(struct intel_engine_cs *engine)
 			/* port0 completed, advanced to port1 */
 			trace_ports(execlists, "completed", execlists->active);
 
-                        bool trace = false;
+                        trace = false;
                         if (atomic_xchg(&execlists->overload, 0)) {
                                 if (!(engine->gt->qos.debug & 1))
                                         intel_qos_overload_end(&engine->gt->qos);
