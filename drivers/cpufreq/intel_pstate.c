@@ -2673,12 +2673,14 @@ static void intel_pstate_update_util(struct update_util_data *data, u64 time,
 static void intel_pstate_update_util_vlp(struct update_util_data *data,
 					 u64 time, unsigned int flags)
 {
+	struct cpudata *cpu;
+
 	if (vlp_params.debug & 16) {
 		intel_pstate_update_util(data, time, flags);
 		return;
 	}
 
-	struct cpudata *cpu = container_of(data, struct cpudata, update_util);
+	cpu = container_of(data, struct cpudata, update_util);
 
 	if (update_vlp_sample(cpu, time, flags)) {
 		const int32_t target = get_vlp_target_pstate(cpu);
