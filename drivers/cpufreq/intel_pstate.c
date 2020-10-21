@@ -23,6 +23,8 @@
 #include <linux/sysfs.h>
 #include <linux/types.h>
 #include <linux/fs.h>
+#include "../../kernel/sched/sched.h"
+#undef ACPI_PROBE_TABLE
 #include <linux/acpi.h>
 #include <linux/vmalloc.h>
 #include <linux/pm_qos.h>
@@ -34,7 +36,6 @@
 #include <asm/cpufeature.h>
 #include <asm/intel-family.h>
 
-#include "../../kernel/sched/sched.h"
 
 #define INTEL_PSTATE_SAMPLING_INTERVAL	(10 * NSEC_PER_MSEC)
 
